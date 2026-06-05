@@ -1,144 +1,169 @@
-// ── X 버튼 클릭 → 윈도우 닫기 ──────────────────────────────
-document.getElementById('close-btn').onclick = function() {
-  window.close();
-};
+/*
+  =====================================================================
+  options.js
+  =====================================================================
 
-// ── 통계 카운터 (Python의 딕셔너리와 같은 역할) ──────────────
-var stats = { total: 0, news: 0, skip: 0, err: 0 };
+  이 파일은 확장 프로그램의 설정 페이지(options.html)에서 실행됩니다.
+  사용자가 Groq API 키를 입력하고 저장하거나 삭제하는 기능을 담당합니다.
 
-// ── 시작 시각 표시 ────────────────────────────────────────────
-document.getElementById('start-time').textContent = now();
+  이 파일이 하는 일:
+  1. 설정 페이지가 열리면 이미 저장된 API 키가 있는지 확인해서 입력칸에 표시합니다.
+  2. 저장 버튼을 누르면 입력된 키를 브라우저 저장소에 저장합니다.
+  3. 삭제 버튼을 누르면 저장된 키를 삭제합니다.
 
-function now() {
-  var d = new Date();
-  return d.getHours().toString().padStart(2,'0') + ':' +
-         d.getMinutes().toString().padStart(2,'0') + ':' +
-         d.getSeconds().toString().padStart(2,'0');
-}
+  ★ 다른 파일과의 관계
+     - options.html이 이 파일을 불러옵니다.
+     - 여기서 저장한 API 키를 background.js의 getGroqApiKey()가 읽어서 사용합니다.
+     - manifest.json의 "options_page": "options.html" 설정 덕분에
+       확장 프로그램 관리 페이지에서 "옵션" 버튼을 누르면 이 페이지가 열립니다.
 
-// ── 상태 카드 업데이트 ────────────────────────────────────────
-// Python: def set_status(icon_class, emoji, title, sub): ...
-function setStatus(iconClass, emoji, title, sub) {
-  document.getElementById('status-icon').className = 'status-icon ' + iconClass;
-  document.getElementById('status-icon').textContent = emoji;
-  document.getElementById('status-title').textContent = title;
-  document.getElementById('status-sub').textContent   = sub || '';
-}
+  =====================================================================
+*/
 
-// ── 로그 한 줄 추가 ───────────────────────────────────────────
-// dotClass: info / step / wait / success / skip / error
-// html: 로그 내용 (hl 클래스로 강조 가능)
-function addLog(dotClass, html) {
-  var list = document.getElementById('log-list');
-  var item = document.createElement('div');
-  item.className = 'log-item';
-  item.innerHTML =
-    '<div class="log-dot ' + dotClass + '"></div>' +
-    '<span class="log-text">' + html + '</span>' +
-    '<span class="log-time">' + now() + '</span>';
 
-  // 새 로그는 맨 위에 추가 (최신 순)
-  // Python: log_list.insert(0, item)
-  list.insertBefore(item, list.firstChild);
+// ─────────────────────────────────────────────
+// DOM 요소 참조 변수 선언
+// ─────────────────────────────────────────────
 
-  // 50줄 넘으면 오래된 항목 제거 (메모리 절약)
-  while (list.children.length > 50) {
-    list.removeChild(list.lastChild);
-  }
-}
+/*
+  DOM 요소들은 HTML이 완전히 로드된 후에만 찾을 수 있으므로
+  일단 선언만 해두고, DOMContentLoaded 이벤트 안에서 실제 값을 넣습니다.
+  const 대신 let을 쓴 이유가 바로 이 때문입니다.
+*/
+let form;          // <form id="options-form"> — API 키 입력 폼 전체
+let apiKeyInput;   // <input id="api-key"> — API 키를 직접 입력하는 텍스트 박스
+let clearButton;   // <button id="clear-key"> — "삭제" 버튼
+let statusElement; // <p id="status"> — "저장되었습니다" 등 결과 메시지를 보여주는 단락
 
-// ── 통계 업데이트 ─────────────────────────────────────────────
-function updateStats() {
-  document.getElementById('stat-total').textContent = stats.total;
-  document.getElementById('stat-news').textContent  = stats.news;
-  document.getElementById('stat-skip').textContent  = stats.skip;
-  document.getElementById('stat-err').textContent   = stats.err;
-}
 
-// ── background.js 에서 오는 상태 메시지 수신 ──────────────────
-// Python: for message in message_queue: handle(message)
-chrome.runtime.onMessage.addListener(function(msg) {
-  if (msg.type !== 'STATUS_UPDATE') return;
+// ─────────────────────────────────────────────
+// DOM이 완전히 로드된 후 초기화
+// ─────────────────────────────────────────────
 
-  var step = msg.step;   // 어떤 단계인지
-  var url  = msg.url || '';
-  // URL 에서 도메인만 추출해서 표시 (너무 길면 읽기 불편)
-  var domain = '';
-  try { domain = new URL(url).hostname.replace('www.', ''); } catch(e) {}
+/*
+  DOMContentLoaded: 브라우저가 options.html의 HTML 파싱을 끝낸 직후 발생합니다.
+  이 시점 이후에야 getElementById로 요소를 찾을 수 있습니다.
+  이 이벤트 안에서 요소를 찾고 이벤트를 연결하는 것이 안전한 순서입니다.
+*/
+document.addEventListener("DOMContentLoaded", () => {
+  // 각 HTML 요소를 ID로 찾아서 변수에 저장
+  form          = document.getElementById("options-form");
+  apiKeyInput   = document.getElementById("api-key");
+  clearButton   = document.getElementById("clear-key");
+  statusElement = document.getElementById("status");
 
-  // step 값에 따라 UI 업데이트
-  // Python의 if/elif 체인과 동일
-  if (step === 'hover') {
-    // 링크에 마우스 올린 직후 (1.5초 대기 시작)
-    stats.total++;
-    updateStats();
-    setStatus('running', '⏱', '호버 감지됨', domain);
-    addLog('step', '링크 감지 → <span class="hl">' + domain + '</span> — 1.5초 대기 중');
+  /*
+    이벤트 리스너 연결:
+    form.addEventListener("submit", 함수): 폼 안의 "저장" 버튼을 누르거나
+    Enter 키를 치면 발생하는 submit 이벤트에 saveApiKey 함수를 연결합니다.
 
-  } else if (step === 'fetching') {
-    // 기사 HTML 다운로드 중
-    setStatus('running', '📡', '기사 다운로드 중', domain);
-    addLog('wait', '<span class="hl">' + domain + '</span> — 기사 본문 가져오는 중…');
+    clearButton.addEventListener("click", 함수): "삭제" 버튼 클릭 시 clearApiKey 실행.
+    이 버튼은 type="button"이라서 폼 submit을 발생시키지 않습니다.
+  */
+  form.addEventListener("submit", saveApiKey);
+  clearButton.addEventListener("click", clearApiKey);
 
-  } else if (step === 'checking') {
-    // Gemini 에게 "뉴스인지" 묻는 중
-    setStatus('running', '🤖', 'Gemini 답장 기다리는 중', '뉴스 여부 판단 중…');
-    addLog('wait', 'Gemini API → <span class="hl-yellow">뉴스 여부 판단 중…</span>');
-
-  } else if (step === 'not_news') {
-    // 뉴스가 아님 → 팝업 안 띄움
-    stats.skip++;
-    updateStats();
-    setStatus('idle', '💤', '대기 중', '뉴스 아님 — 무시됨');
-    addLog('skip', '<span class="hl">' + domain + '</span> → <span class="hl-yellow">뉴스 아님</span>, 무시');
-
-  } else if (step === 'searching') {
-    // 교차 검증용 관련 기사 검색 중
-    setStatus('running', '🔎', '교차 검증 중', '관련 기사 검색 중…');
-    addLog('wait', 'Google 검색 → <span class="hl-yellow">관련 기사·반대 기사 탐색 중…</span>');
-
-  } else if (step === 'analyzing') {
-    // 뉴스 확인됨 → 상세 분석 요청 중
-    setStatus('running', '🔬', '상세 분석 중', 'Gemini 답장 기다리는 중…');
-    addLog('wait', 'Gemini API → <span class="hl-green">뉴스 확인됨</span>, 신뢰도·어그로 분석 중…');
-
-  } else if (step === 'done') {
-    // 분석 완료
-    stats.news++;
-    updateStats();
-    var r = msg.reliability; var a = msg.aggro;
-    var rColor = r >= 70 ? 'hl-green' : r >= 40 ? 'hl-yellow' : 'hl-red';
-    var aColor = a >= 70 ? 'hl-red'   : a >= 40 ? 'hl-yellow' : 'hl-green';
-    setStatus('done', '✅', '분석 완료', '신뢰도 ' + r + ' · 어그로 ' + a);
-    addLog('success',
-      '<span class="hl">' + domain + '</span> 분석 완료 — ' +
-      '신뢰도 <span class="' + rColor + '">' + r + '</span> · ' +
-      '어그로 <span class="' + aColor + '">' + a + '</span>');
-
-  } else if (step === 'error') {
-    // 오류 발생
-    stats.err++;
-    updateStats();
-    setStatus('error', '⚠️', '오류 발생', msg.error || '');
-    addLog('error', '오류: <span class="hl-red">' + (msg.error || '알 수 없는 오류') + '</span>');
-
-  } else if (step === 'cancelled') {
-    // 마우스가 1.5초 전에 링크에서 벗어남
-    setStatus('idle', '💤', '대기 중', '취소됨 — 다시 호버해보세요');
-    addLog('info', '<span class="hl">' + domain + '</span> — 호버 취소됨');
-  }
+  // 페이지가 열리자마자 이미 저장된 키가 있으면 입력칸에 채워줌
+  loadSavedKey();
 });
 
-// ── 로그 초기화 버튼 ──────────────────────────────────────────
-document.getElementById('clear-btn').onclick = function() {
-  var list = document.getElementById('log-list');
-  list.innerHTML =
-    '<div class="log-item">' +
-    '<div class="log-dot info"></div>' +
-    '<span class="log-text">로그가 초기화됐습니다.</span>' +
-    '<span class="log-time">' + now() + '</span>' +
-    '</div>';
-  stats = { total: 0, news: 0, skip: 0, err: 0 };
-  updateStats();
-  setStatus('idle', '💤', '대기 중', '링크에 마우스를 올려보세요');
-};
+
+// ─────────────────────────────────────────────
+// 저장된 API 키를 읽어 입력칸에 표시하는 함수
+// ─────────────────────────────────────────────
+
+/*
+  loadSavedKey: 브라우저 저장소에서 "groqApiKey" 키로 저장된 값을 읽어서
+  입력 칸에 미리 채워줍니다. 사용자가 설정 페이지를 열 때마다 키를 다시 입력하지 않아도 됩니다.
+
+  chrome.storage.local.get(키 배열, 콜백):
+    저장소에서 지정한 키들의 값을 읽고, 읽기가 끝나면 콜백 함수를 호출합니다.
+    콜백의 매개변수 items는 { groqApiKey: "저장된값" } 형태의 객체입니다.
+    해당 키가 없으면 items.groqApiKey는 undefined가 됩니다.
+*/
+function loadSavedKey() {
+  chrome.storage.local.get(["groqApiKey"], (items) => {
+    // typeof items.groqApiKey === "string": 값이 실제 문자열인지 확인
+    // items.groqApiKey가 빈 문자열("")인 경우는 표시할 필요가 없으므로 &&로 추가 확인
+    if (typeof items.groqApiKey === "string" && items.groqApiKey) {
+      apiKeyInput.value = items.groqApiKey; // 입력칸에 저장된 키 값 채우기
+      setStatus("저장된 API Key가 있습니다.");
+    }
+  });
+}
+
+
+// ─────────────────────────────────────────────
+// API 키를 저장하는 함수 (폼 제출 이벤트 핸들러)
+// ─────────────────────────────────────────────
+
+/*
+  saveApiKey: "저장" 버튼을 눌렀을 때 호출됩니다.
+  event 매개변수는 폼 제출 이벤트 객체입니다.
+
+  event.preventDefault():
+    폼의 기본 동작(페이지 새로고침 또는 다른 페이지로 이동)을 막습니다.
+    이 한 줄이 없으면 "저장" 버튼을 눌렀을 때 페이지가 새로고침되어
+    입력한 내용이 사라지고 저장 확인도 볼 수 없게 됩니다.
+*/
+function saveApiKey(event) {
+  event.preventDefault(); // 폼의 기본 페이지 이동/새로고침 동작 차단
+
+  // .trim(): 실수로 앞뒤에 공백을 넣었을 때 자동으로 제거
+  const apiKey = apiKeyInput.value.trim();
+
+  // 빈 값이면 저장하지 않고 오류 메시지 표시
+  if (!apiKey) {
+    setStatus("API Key를 입력하세요.", true); // true = 오류 상황 (빨간색 표시)
+    return; // 여기서 함수 종료, 아래 저장 코드 실행 안 함
+  }
+
+  /*
+    chrome.storage.local.set({ 키: 값 }, 콜백):
+    저장소에 데이터를 저장합니다. 저장이 완료되면 콜백이 호출됩니다.
+    여기서 저장한 값을 background.js의 getGroqApiKey()가 나중에 읽어서 사용합니다.
+  */
+  chrome.storage.local.set({ groqApiKey: apiKey }, () => {
+    setStatus("API Key를 저장했습니다."); // 저장 완료 메시지
+  });
+}
+
+
+// ─────────────────────────────────────────────
+// API 키를 삭제하는 함수 ("삭제" 버튼 클릭 핸들러)
+// ─────────────────────────────────────────────
+
+/*
+  clearApiKey: "삭제" 버튼을 눌렀을 때 호출됩니다.
+  저장소에서 API 키를 지우고 입력칸도 비웁니다.
+
+  chrome.storage.local.remove(키 배열, 콜백):
+    저장소에서 지정한 키들을 삭제합니다.
+    삭제가 완료되면 콜백이 호출됩니다.
+*/
+function clearApiKey() {
+  chrome.storage.local.remove(["groqApiKey"], () => {
+    apiKeyInput.value = ""; // 입력칸 비우기
+    setStatus("API Key를 삭제했습니다.");
+  });
+}
+
+
+// ─────────────────────────────────────────────
+// 상태 메시지를 표시하는 공통 함수
+// ─────────────────────────────────────────────
+
+/*
+  setStatus: 폼 아래의 상태 메시지 영역에 텍스트를 표시합니다.
+  오류일 때와 성공일 때 텍스트 색상을 다르게 합니다.
+
+  매개변수:
+    message - 표시할 메시지 문자열
+    isError - 오류 상황이면 true, 성공/정상이면 false (기본값)
+              true면 빨간색, false면 초록색으로 표시
+*/
+function setStatus(message, isError = false) {
+  statusElement.textContent = message;
+  // 삼항 연산자: 조건 ? 참일 때 값 : 거짓일 때 값
+  statusElement.style.color = isError ? "#a43131" : "#12633d";
+}
