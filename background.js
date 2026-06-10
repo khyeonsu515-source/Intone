@@ -34,6 +34,10 @@ const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 // 사용할 AI 모델의 이름 (Llama 3.1 8B 모델)
 const GROQ_MODEL = "llama-3.1-8b-instant";
 
+const CEREBRAS_ENDPOINT = "https://api.cerebras.ai/v1/chat/completions";
+
+const CEREBRAS_MODEL = "gpt-oss-120b";
+
 // 캐시(기억)를 얼마나 오래 유지할지: 6시간을 밀리초로 표현
 // 계산: 1000ms(1초) × 60(1분) × 60(1시간) × 6(6시간)
 const CACHE_TTL_MS = 1000 * 60 * 60 * 6;
@@ -41,10 +45,24 @@ const CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 // 브라우저 저장소에 상태를 저장할 때 사용하는 이름표(키)
 const STATUS_STORAGE_KEY = "currentAnalysisStatus";
 
+const AI_ACTIVE_CREDENTIAL_INDEX_STORAGE_KEY = "aiActiveCredentialIndex";
+
+const LEARNED_NEWS_PATTERNS_STORAGE_KEY = "learnedNewsUrlPrefixes";
+
+const NEWS_SITE_OBSERVATIONS_STORAGE_KEY = "newsSiteObservations";
+
+const NEWS_SITE_LEARNING_THRESHOLD = 2;
+
 // 분석 결과를 임시로 보관하는 메모리 저장소 (Map = 키-값 쌍을 저장하는 자료구조)
 // 키: URL 문자열, 값: 해당 URL의 분석 결과 + 저장 시각
 // ※ 주의: Service Worker가 절전 상태로 종료되면 이 데이터도 같이 사라집니다.
 const analysisCache = new Map();
+
+try {
+  importScripts("known_news_patterns.js");
+} catch (error) {
+  self.KNOWN_NEWS_URL_PREFIXES = [];
+}
 
 
 // ─────────────────────────────────────────────
@@ -113,6 +131,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // 위 두 가지가 아닌 알 수 없는 메시지는 무시
+  if (message?.type === "CHECK_KNOWN_NEWS_LINK") {
+    const url = normalizeUrl(message.payload?.url || "");
+    isKnownNewsUrl(url)
+      .then((isKnownNews) => sendResponse({ ok: true, is_known_news: isKnownNews }))
+      .catch(() => sendResponse({ ok: true, is_known_news: false }));
+    return true;
+  }
+
   if (message?.type !== "ANALYZE_NEWS_LINK") {
     return false;
   }
@@ -192,8 +218,8 @@ async function handleAnalyzeRequest(payload, sender) {
   }
 
   // 브라우저 저장소에서 Groq API 키를 가져옴
-  const apiKey = await getGroqApiKey();
-  if (!apiKey) {
+  const credentials = await getAiCredentials();
+  if (!credentials.length) {
     // API 키가 없으면 분석 불가 → 사용자에게 설정 안내
     throw new Error("API Key를 options에서 설정하세요.");
   }
@@ -217,7 +243,10 @@ async function handleAnalyzeRequest(payload, sender) {
   // 팝업에 "뉴스 판별 중" 단계 표시 후, AI에게 1차 판별 요청
   // validateArticleCheck()는 AI 응답이 예상 형식인지 검사하고 정제
   updateStatus({ stage: "news_checking", label: "뉴스인지 판별 중", url, tabId });
-  const articleCheck = validateArticleCheck(await requestArticleCheck(apiKey, analysisInput));
+  const skipArticleCheck = Boolean(payload?.skip_article_check);
+  const articleCheck = skipArticleCheck
+    ? { is_article: true, confidence: 100, reason: "알려진 언론사 기사 URL 패턴과 일치" }
+    : validateArticleCheck(await requestArticleCheck(credentials, analysisInput));
 
   // AI가 "뉴스 기사가 아니다"라고 판단한 경우
   if (!articleCheck.is_article) {
@@ -235,7 +264,11 @@ async function handleAnalyzeRequest(payload, sender) {
 
   // 뉴스 기사가 맞다고 판별됐으면 신뢰도·어그로도 본 분석 진행
   updateStatus({ stage: "analyzing", label: "뉴스 신뢰도·어그로도 분석 중", url, tabId });
-  const analysis  = await requestGroqAnalysis(apiKey, analysisInput);
+  if (!skipArticleCheck) {
+    await learnNewsPatternFromConfirmedArticle(credentials, analysisInput).catch(() => {});
+  }
+
+  const analysis  = await requestGroqAnalysis(credentials, analysisInput);
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
   const validated = validateAnalysis(analysis);
 
@@ -339,11 +372,33 @@ function getStoredStatus() {
   API 키는 options.html 설정 페이지에서 사용자가 직접 입력해서 저장한 값입니다.
   키가 없거나 문자열이 아닌 값이면 빈 문자열을 반환합니다.
 */
-function getGroqApiKey() {
+function getAiCredentials() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["groqApiKey"], (items) => {
-      // typeof 검사: 저장된 값이 실제로 문자열인지 확인 후 앞뒤 공백 제거
-      resolve(typeof items.groqApiKey === "string" ? items.groqApiKey.trim() : "");
+    chrome.storage.local.get(["groqApiKey", "groqApiKeys", "cerebrasApiKeys"], (items) => {
+      const groqKeys = Array.isArray(items.groqApiKeys)
+        ? items.groqApiKeys
+        : [];
+      const legacyKeys = typeof items.groqApiKey === "string"
+        ? [items.groqApiKey]
+        : [];
+      const cerebrasKeys = Array.isArray(items.cerebrasApiKeys)
+        ? items.cerebrasApiKeys
+        : [];
+
+      resolve([
+        ...normalizeApiKeys([...groqKeys, ...legacyKeys]).map((key) => ({
+          provider: "Groq",
+          key,
+          endpoint: GROQ_ENDPOINT,
+          model: GROQ_MODEL
+        })),
+        ...normalizeApiKeys(cerebrasKeys).map((key) => ({
+          provider: "Cerebras",
+          key,
+          endpoint: CEREBRAS_ENDPOINT,
+          model: CEREBRAS_MODEL
+        }))
+      ]);
     });
   });
 }
@@ -421,8 +476,8 @@ async function fetchArticlePreview(url) {
   system 역할에는 AI가 어떻게 판단해야 하는지 지침(프롬프트)을,
   user 역할에는 실제 기사 데이터를 전달합니다.
 */
-async function requestArticleCheck(apiKey, payload) {
-  return requestGroqJson(apiKey, [
+async function requestArticleCheck(credentials, payload) {
+  return requestGroqJson(credentials, [
     {
       role: "system",
       // buildArticleCheckPrompt()는 AI에게 주는 역할 지침 문자열을 반환
@@ -446,11 +501,24 @@ async function requestArticleCheck(apiKey, payload) {
   신뢰도 점수, 어그로도 점수, 세부 항목 점수, 요약 등을 AI에게 요청합니다.
   requestArticleCheck와 구조는 동일하지만 다른 프롬프트를 사용합니다.
 */
-async function requestGroqAnalysis(apiKey, payload) {
-  return requestGroqJson(apiKey, [
+async function requestGroqAnalysis(credentials, payload) {
+  return requestGroqJson(credentials, [
     {
       role: "system",
       content: buildAnalysisPrompt()
+    },
+    {
+      role: "user",
+      content: JSON.stringify(payload, null, 2)
+    }
+  ]);
+}
+
+async function requestNewsSitePattern(credentials, payload) {
+  return requestGroqJson(credentials, [
+    {
+      role: "system",
+      content: buildNewsSitePatternPrompt()
     },
     {
       role: "user",
@@ -484,16 +552,42 @@ async function requestGroqAnalysis(apiKey, payload) {
       ]
     }
 */
-async function requestGroqJson(apiKey, messages) {
-  const response = await fetch(GROQ_ENDPOINT, {
+async function requestGroqJson(credentials, messages) {
+  const candidates = Array.isArray(credentials) ? credentials : [];
+  const startIndex = await getActiveCredentialIndex(candidates.length);
+  let lastError = null;
+
+  for (let offset = 0; offset < candidates.length; offset += 1) {
+    const index = (startIndex + offset) % candidates.length;
+    try {
+      const result = await requestGroqJsonWithCredential(candidates[index], messages);
+      await setActiveCredentialIndex(index);
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGroqError(error) || offset === candidates.length - 1) {
+        if (offset === candidates.length - 1) {
+          await setActiveCredentialIndex((index + 1) % candidates.length);
+        }
+        throw error;
+      }
+      await setActiveCredentialIndex((index + 1) % candidates.length);
+    }
+  }
+
+  throw lastError || new Error("사용할 수 있는 AI API Key가 없습니다.");
+}
+
+async function requestGroqJsonWithCredential(credential, messages) {
+  const response = await fetch(credential.endpoint, {
     method: "POST",
     headers: {
       // Authorization 헤더에 API 키를 "Bearer 키값" 형식으로 포함
-      "Authorization": `Bearer ${apiKey}`,
+      "Authorization": `Bearer ${credential.key}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model:           GROQ_MODEL,
+      model:           credential.model,
       temperature:     0.1,                        // 0에 가까울수록 일관성 있는 답변, 1에 가까울수록 창의적
       response_format: { type: "json_object" },    // AI가 반드시 JSON만 반환하도록 강제
       messages
@@ -503,7 +597,9 @@ async function requestGroqJson(apiKey, messages) {
   // HTTP 요청 자체가 실패한 경우 (네트워크 오류, 인증 실패 등)
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
-    throw new Error(`Groq API 요청 실패 (${response.status}) ${truncate(errorText, 200)}`);
+    const error = new Error(`${credential.provider} API 요청 실패 (${response.status}) ${truncate(errorText, 200)}`);
+    error.status = response.status;
+    throw error;
   }
 
   // 응답 본문을 JSON으로 파싱
@@ -558,6 +654,29 @@ function buildArticleCheckPrompt() {
   반환 형식을 상세하게 알려주는 지침 문자열을 반환합니다.
   각 항목의 배점 기준도 포함되어 있어 AI가 일관된 기준으로 채점하도록 유도합니다.
 */
+function buildNewsSitePatternPrompt() {
+  return `
+너는 아직 등록되지 않은 사이트가 뉴스 전문 사이트인지 판단하는 분류기다.
+제공된 host, 확인된 기사 URL 목록, 현재 URL, title, meta, 본문 일부만 근거로 사용한다.
+뉴스 전문 사이트이거나 기사 페이지를 꾸준히 제공하는 언론/매체 사이트라면, 기사 URL을 식별할 수 있는 접두어를 알려 준다.
+홈페이지 전체를 뜻하는 "https://example.com/" 같은 너무 넓은 접두어는 피한다.
+"/news/", "/article/", "/view/", "/articles/"처럼 기사 페이지에 반복되는 경로 접두어를 우선한다.
+확신이 낮거나 기사 URL 형식을 특정하기 어렵다면 is_news_site를 false로 반환한다.
+응답은 오직 JSON 객체 하나만 반환한다.
+
+형식:
+{
+  "is_news_site": true,
+  "confidence": 86,
+  "url_prefixes": [
+    "https://example.com/news/",
+    "https://example.com/article/"
+  ],
+  "reason": "확인된 URL들이 같은 매체의 개별 기사 페이지 형식과 일치함"
+}
+`.trim();
+}
+
 function buildAnalysisPrompt() {
   return `
 너는 뉴스 링크의 신뢰도와 어그로도를 평가하는 분석기다.
@@ -786,7 +905,7 @@ function parseAttributes(tag) {
   // "([^"]*)"                     → 큰따옴표로 감싼 값 (캡처 그룹 3)
   // '([^']*)'                     → 작은따옴표로 감싼 값 (캡처 그룹 4)
   // ([^\s"'=<>`]+)                → 따옴표 없는 값 (캡처 그룹 5)
-  const regex = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\\s*=\\s*("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+  const regex = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
   let match = regex.exec(tag);
 
   while (match) {
@@ -827,6 +946,221 @@ function decodeHtml(value) {
     .replace(/&#x27;/gi, "'")
     .replace(/\s+/g, " ")     // 연속된 공백/줄바꿈을 하나의 공백으로
     .trim();                   // 앞뒤 공백 제거
+}
+
+function normalizeApiKeys(keys) {
+  const seen = new Set();
+  return keys
+    .map((key) => String(key || "").trim())
+    .filter(Boolean)
+    .filter((key) => {
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
+async function isKnownNewsUrl(url) {
+  const normalizedUrl = normalizeUrl(url).toLowerCase();
+  if (!normalizedUrl) {
+    return false;
+  }
+
+  const defaultPrefixes = Array.isArray(self.KNOWN_NEWS_URL_PREFIXES)
+    ? self.KNOWN_NEWS_URL_PREFIXES
+    : [];
+  const learnedPrefixes = await getLearnedNewsPrefixes();
+  const prefixes = defaultPrefixes.concat(learnedPrefixes);
+
+  return prefixes.some((prefix) => normalizedUrl.startsWith(String(prefix || "").toLowerCase()));
+}
+
+async function learnNewsPatternFromConfirmedArticle(credentials, analysisInput) {
+  const url = normalizeUrl(analysisInput?.url || "");
+  if (!url || await isKnownNewsUrl(url)) {
+    return;
+  }
+
+  const site = getUrlSiteInfo(url);
+  if (!site.hostname) {
+    return;
+  }
+
+  const observations = await getStorageObject(NEWS_SITE_OBSERVATIONS_STORAGE_KEY);
+  const existing = observations[site.hostname] || {};
+  if (existing.status === "learned" || existing.status === "rejected") {
+    return;
+  }
+
+  const urls = Array.isArray(existing.urls) ? existing.urls.slice(0, 8) : [];
+  if (!urls.includes(url)) {
+    urls.push(url);
+  }
+
+  observations[site.hostname] = {
+    count: urls.length,
+    urls,
+    status: existing.status || "observing",
+    lastSeenAt: Date.now()
+  };
+  await setStorageValues({ [NEWS_SITE_OBSERVATIONS_STORAGE_KEY]: observations });
+
+  if (urls.length < NEWS_SITE_LEARNING_THRESHOLD) {
+    return;
+  }
+
+  observations[site.hostname].status = "checking";
+  observations[site.hostname].lastCheckedAt = Date.now();
+  await setStorageValues({ [NEWS_SITE_OBSERVATIONS_STORAGE_KEY]: observations });
+
+  const patternCheck = validateNewsSitePattern(await requestNewsSitePattern(credentials, {
+    host: site.hostname,
+    origin: site.origin,
+    confirmed_article_urls: urls,
+    current_article: analysisInput
+  }), site);
+
+  if (!patternCheck.is_news_site || !patternCheck.url_prefixes.length) {
+    observations[site.hostname].status = "rejected";
+    observations[site.hostname].reason = patternCheck.reason;
+    await setStorageValues({ [NEWS_SITE_OBSERVATIONS_STORAGE_KEY]: observations });
+    return;
+  }
+
+  const learnedPrefixes = await getLearnedNewsPrefixes();
+  const mergedPrefixes = mergeUrlPrefixes(learnedPrefixes, patternCheck.url_prefixes);
+  observations[site.hostname].status = "learned";
+  observations[site.hostname].learnedPrefixes = patternCheck.url_prefixes;
+  observations[site.hostname].reason = patternCheck.reason;
+  await setStorageValues({
+    [LEARNED_NEWS_PATTERNS_STORAGE_KEY]: mergedPrefixes,
+    [NEWS_SITE_OBSERVATIONS_STORAGE_KEY]: observations
+  });
+}
+
+function validateNewsSitePattern(value, site) {
+  const prefixes = Array.isArray(value?.url_prefixes)
+    ? value.url_prefixes
+        .map((prefix) => normalizeUrlPrefix(prefix))
+        .filter((prefix) => isAcceptableLearnedPrefix(prefix, site))
+    : [];
+
+  return {
+    is_news_site: Boolean(value?.is_news_site) && clampScore(value?.confidence) >= 65,
+    confidence: clampScore(value?.confidence),
+    url_prefixes: prefixes,
+    reason: sanitizeText(value?.reason || "사이트 성격을 충분히 확인하지 못했습니다.", 180)
+  };
+}
+
+function isAcceptableLearnedPrefix(prefix, site) {
+  if (!prefix) {
+    return false;
+  }
+
+  const info = getUrlSiteInfo(prefix);
+  if (info.hostname !== site.hostname) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(prefix);
+    return parsed.pathname !== "/";
+  } catch (error) {
+    return false;
+  }
+}
+
+function normalizeUrlPrefix(prefix) {
+  const normalized = normalizeUrl(String(prefix || "").trim());
+  if (!normalized) {
+    return "";
+  }
+
+  const parsed = new URL(normalized);
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function mergeUrlPrefixes(currentPrefixes, nextPrefixes) {
+  const seen = new Set();
+  return currentPrefixes
+    .concat(nextPrefixes)
+    .map((prefix) => normalizeUrlPrefix(prefix))
+    .filter(Boolean)
+    .filter((prefix) => {
+      const key = prefix.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
+async function getLearnedNewsPrefixes() {
+  const prefixes = await getStorageValue(LEARNED_NEWS_PATTERNS_STORAGE_KEY, []);
+  return Array.isArray(prefixes) ? prefixes.filter((prefix) => typeof prefix === "string" && prefix.trim()) : [];
+}
+
+function getUrlSiteInfo(url) {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    return {
+      hostname,
+      origin: `${parsed.protocol}//${parsed.hostname}`
+    };
+  } catch (error) {
+    return { hostname: "", origin: "" };
+  }
+}
+
+function getStorageValue(key, fallbackValue) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([key], (items) => {
+      resolve(items[key] === undefined ? fallbackValue : items[key]);
+    });
+  });
+}
+
+async function getStorageObject(key) {
+  const value = await getStorageValue(key, {});
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function setStorageValues(values) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set(values, resolve);
+  });
+}
+
+function getActiveCredentialIndex(keyCount) {
+  return new Promise((resolve) => {
+    if (!keyCount) {
+      resolve(0);
+      return;
+    }
+
+    chrome.storage.local.get([AI_ACTIVE_CREDENTIAL_INDEX_STORAGE_KEY], (items) => {
+      const index = Number(items[AI_ACTIVE_CREDENTIAL_INDEX_STORAGE_KEY]);
+      resolve(Number.isInteger(index) && index >= 0 ? index % keyCount : 0);
+    });
+  });
+}
+
+function setActiveCredentialIndex(index) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [AI_ACTIVE_CREDENTIAL_INDEX_STORAGE_KEY]: index }, resolve);
+  });
+}
+
+function isRetryableGroqError(error) {
+  const status = Number(error?.status);
+  return [401, 403, 408, 409, 429, 500, 502, 503, 504].includes(status);
 }
 
 

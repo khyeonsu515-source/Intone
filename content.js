@@ -30,8 +30,12 @@
 // 마우스를 링크 위에 이 시간(ms) 동안 올려두면 분석을 시작
 const HOVER_DELAY_MS = 1000;
 
+const UNKNOWN_NEWS_DELAY_MS = 4000;
+
 // AI에게 넘기는 링크 텍스트의 최대 길이 (토큰 절약용)
 const MAX_LINK_TEXT_LENGTH = 300;
+
+const POPUP_INTERACTION_GRACE_MS = 1000;
 
 
 // ─────────────────────────────────────────────
@@ -54,9 +58,17 @@ let popup = null;
 // 새 요청을 보낼 때마다 1씩 증가하고, 응답이 도착했을 때 현재 번호와 일치하면 처리
 let currentRequestId = 0;
 
+let analysisStartedForActiveLink = false;
+
+let suppressPopupMouseOutUntil = 0;
+
+let popupGraceCloseTimer = null;
+
 // 팝업이 현재 어느 좌표에 표시되고 있는지 기억해두는 값 {x, y}
 // 창 크기 변경/스크롤 시 팝업 위치를 재계산할 때 사용
 let popupAnchor = null;
+
+let popupOpenPoint = null;
 
 
 // ─────────────────────────────────────────────
@@ -85,8 +97,20 @@ window.addEventListener("scroll", keepPopupInViewport, true);
   예) "AI 분석 중..." → "뉴스 판별 중..." → "신뢰도 분석 중..."
 */
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "STATUS_BROADCAST" && popup && !popup.hidden) {
-    updateLoadingStatus(message.status?.label || "처리 중...");
+  if (message?.type !== "STATUS_BROADCAST") {
+    return;
+  }
+
+  const status = message.status || {};
+
+  if (status.stage === "analyzing" && isStatusForActiveLink(status) && getPopupOpenPoint()) {
+    suppressPopupMouseOutUntil = Date.now() + 800;
+    showLoadingPopupAtAnchor(status.label || "AI 분석 중...");
+    return;
+  }
+
+  if (popup && !popup.hidden) {
+    updateLoadingStatus(status.label || "처리 중...");
   }
 });
 
@@ -121,15 +145,14 @@ function handleMouseOver(event) {
 
   activeLink      = link;  // 현재 올라가 있는 링크를 기억
   lastMouseEvent  = event; // 마우스 위치를 팝업 표시에 사용
+  popupOpenPoint  = null;
+  analysisStartedForActiveLink = false;
   clearHoverTimer();       // 이전 타이머가 있으면 먼저 취소 (다른 링크로 빠르게 이동 시)
-
-  // background.js에 "링크 위에 올라왔어"라고 알림 (action_popup 단계 표시용)
-  sendStatus("link_detected", "링크 인식", href);
 
   // 1초 후 analyzeHoveredLink 실행 예약
   // window.setTimeout(함수, 시간): 지정한 시간(ms) 후에 함수를 실행
   hoverTimer = window.setTimeout(() => {
-    analyzeHoveredLink(link, event);
+    handleInitialHoverDelay(link, event);
   }, HOVER_DELAY_MS);
 }
 
@@ -139,6 +162,11 @@ function handleMouseOver(event) {
   단, 팝업 위로 이동하거나 링크 안의 자식 요소로 이동한 경우는 무시합니다.
 */
 function handleMouseOut(event) {
+  if (isPopupInteractionGraceActive()) {
+    schedulePopupCloseAfterGrace();
+    return;
+  }
+
   const link = event.target.closest("a[href]");
 
   // 벗어난 요소가 현재 활성 링크가 아니면 무시
@@ -152,11 +180,7 @@ function handleMouseOut(event) {
     return;
   }
 
-  clearHoverTimer();      // 분석 타이머 취소
-  activeLink       = null;
-  currentRequestId += 1; // 요청 ID를 올려서 진행 중인 분석 응답이 와도 무시되게 함
-  hidePopup();
-  sendStatus("idle", "대기 중", "");
+  closePopupFromPointerExit();
 }
 
 /*
@@ -177,6 +201,46 @@ function clearHoverTimer() {
     window.clearTimeout(hoverTimer);
     hoverTimer = null;
   }
+}
+
+function handleInitialHoverDelay(link, event) {
+  hoverTimer = null;
+  if (activeLink !== link) {
+    return;
+  }
+
+  checkKnownNewsLink(link.href, (isKnownNews) => {
+    if (activeLink !== link) {
+      return;
+    }
+
+    if (isKnownNews) {
+      analyzeHoveredLink(link, event, { skipArticleCheck: true });
+      return;
+    }
+
+    hoverTimer = window.setTimeout(() => {
+      if (activeLink === link) {
+        analyzeHoveredLink(link, event);
+      }
+    }, Math.max(0, UNKNOWN_NEWS_DELAY_MS - HOVER_DELAY_MS));
+  });
+}
+
+function checkKnownNewsLink(url, callback) {
+  chrome.runtime.sendMessage(
+    {
+      type: "CHECK_KNOWN_NEWS_LINK",
+      payload: { url }
+    },
+    (response) => {
+      if (chrome.runtime.lastError || !response?.ok) {
+        callback(false);
+        return;
+      }
+      callback(Boolean(response.is_known_news));
+    }
+  );
 }
 
 
@@ -215,8 +279,9 @@ function analyzeHoveredLink(link, event, options = {}) {
   // textContent: 렌더링과 무관한 원시 텍스트 (fallback으로 사용)
   const linkText = normalizeText(link.innerText || link.textContent || "").slice(0, MAX_LINK_TEXT_LENGTH);
 
-  // 로딩 팝업 표시 (마우스 현재 위치에)
-  showLoadingPopup(event.clientX, event.clientY, options.forceRefresh ? "다시 분석 중..." : "AI 분석 중...");
+  // 뉴스 기사 여부를 먼저 조용히 확인한 뒤, 뉴스로 판별되어 본 분석에 들어갈 때 로딩 팝업을 표시
+  analysisStartedForActiveLink = true;
+  popupOpenPoint = { x: event.clientX, y: event.clientY };
   sendStatus("hover_confirmed", "1초 머무름 확인", href);
 
   /*
@@ -237,7 +302,8 @@ function analyzeHoveredLink(link, event, options = {}) {
       payload: {
         url:           href,
         link_text:     linkText,
-        force_refresh: Boolean(options.forceRefresh)
+        force_refresh: Boolean(options.forceRefresh),
+        skip_article_check: Boolean(options.skipArticleCheck)
       }
     },
     (response) => {
@@ -257,6 +323,11 @@ function analyzeHoveredLink(link, event, options = {}) {
       // background.js가 { ok: false, error: "..." } 로 응답한 경우
       if (!response || !response.ok) {
         showErrorPopup(response?.error || "AI 분석 중 문제가 발생했습니다.");
+        return;
+      }
+
+      if (!response.data?.is_article) {
+        hidePopup();
         return;
       }
 
@@ -296,6 +367,67 @@ function normalizeText(text) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function isStatusForActiveLink(status) {
+  return activeLink && normalizeUrlForCompare(status.url) === normalizeUrlForCompare(activeLink.href);
+}
+
+function normalizeUrlForCompare(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    return parsed.toString();
+  } catch (error) {
+    return "";
+  }
+}
+
+function isPopupInteractionGraceActive() {
+  return Date.now() < suppressPopupMouseOutUntil;
+}
+
+function schedulePopupCloseAfterGrace() {
+  window.clearTimeout(popupGraceCloseTimer);
+  popupGraceCloseTimer = window.setTimeout(() => {
+    if (isPointerInsideActiveAreas()) {
+      return;
+    }
+    closePopupFromPointerExit();
+  }, Math.max(0, suppressPopupMouseOutUntil - Date.now()) + 20);
+}
+
+function isPointerInsideActiveAreas() {
+  if (!lastMouseEvent) {
+    return false;
+  }
+
+  const element = document.elementFromPoint(lastMouseEvent.clientX, lastMouseEvent.clientY);
+  return Boolean(element && (popup?.contains(element) || activeLink?.contains(element)));
+}
+
+function closePopupFromPointerExit() {
+  const shouldSendIdle = analysisStartedForActiveLink;
+  clearHoverTimer();
+  activeLink = null;
+  analysisStartedForActiveLink = false;
+  popupOpenPoint = null;
+  currentRequestId += 1;
+  hidePopup();
+  if (shouldSendIdle) {
+    sendStatus("idle", "대기 중", "");
+  }
+}
+
+function getPopupOpenPoint() {
+  return popupOpenPoint || popupAnchor;
+}
+
+function showLoadingPopupAtAnchor(message) {
+  const point = getPopupOpenPoint();
+  if (point) {
+    showLoadingPopup(point.x, point.y, message);
+  }
+}
+
 
 // ─────────────────────────────────────────────
 // 팝업 DOM 요소 관리
@@ -332,23 +464,19 @@ function ensurePopup() {
 /*
   handlePopupClick: 팝업 안의 버튼을 클릭했을 때 실행됩니다.
   어떤 버튼인지는 data-ai-news-action 속성 값으로 구분합니다.
-  HTML에서 이렇게 사용합니다: <button data-ai-news-action="reanalyze">다시 분석</button>
+  HTML에서 이렇게 사용합니다: <button data-ai-news-action="toggle-details">상세 정보 보기</button>
 
-  두 가지 버튼을 처리합니다:
+  버튼 동작:
     "toggle-details" → 세부 항목 펼치기/접기
-    "reanalyze"      → 캐시를 무시하고 다시 분석 요청
 */
 function handlePopupClick(event) {
   // event.target에서 가장 가까운 data-ai-news-action 속성을 가진 요소를 찾음
   // .dataset.aiNewsAction → data-ai-news-action 속성 값 (케밥→카멜 변환 자동)
-  const action = event.target.closest("[data-ai-news-action]")?.dataset.aiNewsAction;
+  const button = event.target.closest("[data-ai-news-action]");
+  const action = button?.dataset.aiNewsAction;
 
   if (action === "toggle-details") {
-    toggleDetails();
-  }
-
-  if (action === "reanalyze" && activeLink && lastMouseEvent) {
-    analyzeHoveredLink(activeLink, lastMouseEvent, { forceRefresh: true });
+    toggleDetails(button);
   }
 }
 
@@ -357,10 +485,14 @@ function handlePopupClick(event) {
   <details open> 이면 세부 항목이 펼쳐진 상태, open이 없으면 접힌 상태입니다.
   내용이 바뀌면 팝업 높이가 달라지므로 keepPopupInViewport()도 호출합니다.
 */
-function toggleDetails() {
+function toggleDetails(button) {
   const details = popup?.querySelector(".ai-news-popup__details");
   if (details) {
+    suppressPopupMouseOutUntil = Date.now() + POPUP_INTERACTION_GRACE_MS;
     details.open = !details.open; // true면 false로, false면 true로 반전
+    if (button) {
+      button.textContent = details.open ? "간략히 보기" : "상세 정보 보기";
+    }
     keepPopupInViewport();
   }
 }
@@ -371,15 +503,17 @@ function toggleDetails() {
   완전히 다른 곳으로 나가면 팝업을 닫습니다.
 */
 function handlePopupMouseOut(event) {
+  if (isPopupInteractionGraceActive()) {
+    schedulePopupCloseAfterGrace();
+    return;
+  }
+
   // 팝업 내부나 원래 링크로 이동한 경우 무시
   if (popup?.contains(event.relatedTarget) || activeLink?.contains(event.relatedTarget)) {
     return;
   }
 
-  activeLink       = null;
-  currentRequestId += 1;
-  hidePopup();
-  sendStatus("idle", "대기 중", "");
+  closePopupFromPointerExit();
 }
 
 
@@ -447,8 +581,9 @@ function showErrorPopup(message) {
   `;
   popupElement.hidden = false;
 
-  if (lastMouseEvent) {
-    positionPopup(lastMouseEvent.clientX, lastMouseEvent.clientY);
+  const point = getPopupOpenPoint();
+  if (point) {
+    positionPopup(point.x, point.y);
   }
 }
 
@@ -482,7 +617,8 @@ function showResultPopup(result) {
       </section>
     `;
     popupElement.hidden = false;
-    if (lastMouseEvent) positionPopup(lastMouseEvent.clientX, lastMouseEvent.clientY);
+    const point = getPopupOpenPoint();
+    if (point) positionPopup(point.x, point.y);
     return;
   }
 
@@ -538,8 +674,9 @@ function showResultPopup(result) {
   `;
   popupElement.hidden = false;
 
-  if (lastMouseEvent) {
-    positionPopup(lastMouseEvent.clientX, lastMouseEvent.clientY);
+  const point = getPopupOpenPoint();
+  if (point) {
+    positionPopup(point.x, point.y);
   }
 }
 
@@ -597,8 +734,7 @@ function renderSummaryLines(summary, warning) {
 function renderActions(hasDetails) {
   return `
     <div class="news-ai-actions">
-      <button class="news-ai-button news-ai-button--primary" type="button" data-ai-news-action="toggle-details" ${hasDetails ? "" : "disabled"}>상세 분석 보기</button>
-      <button class="news-ai-button news-ai-button--secondary" type="button" data-ai-news-action="reanalyze">다시 분석</button>
+      <button class="news-ai-button news-ai-button--primary" type="button" data-ai-news-action="toggle-details" ${hasDetails ? "" : "disabled"}>상세 정보 보기</button>
     </div>
   `;
 }
@@ -735,6 +871,7 @@ function hidePopup() {
     popup.hidden = true;
   }
   popupAnchor = null; // 위치 기준점도 초기화
+  popupOpenPoint = null;
 }
 
 

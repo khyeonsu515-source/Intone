@@ -187,14 +187,16 @@
 }
 
 #ai-news-link-popup .news-ai-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  display: flex;
+  justify-content: center;
+  padding-top: 2px;
 }
 
 #ai-news-link-popup .news-ai-button {
   min-width: 0;
   min-height: 38px;
+  width: min(190px, 100%);
+  padding: 0 18px;
   border: 0;
   border-radius: 999px;
   cursor: pointer;
@@ -316,6 +318,10 @@
 
   #ai-news-link-popup .news-ai-score-grid {
     grid-template-columns: 1fr;
+  }
+
+  #ai-news-link-popup .news-ai-button {
+    width: 100%;
   }
 }
 

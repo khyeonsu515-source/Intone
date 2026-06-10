@@ -72,7 +72,8 @@
       font-weight: 800;
     }
 
-    input {
+    input,
+    textarea {
       box-sizing: border-box;
       width: 100%;
       padding: 12px 13px;
@@ -80,9 +81,16 @@
       border-radius: 7px;
       color: #111827;
       font-size: 15px;
+      font-family: inherit;
     }
 
-    input:focus {
+    textarea {
+      min-height: 132px;
+      resize: vertical;
+    }
+
+    input:focus,
+    textarea:focus {
       border-color: #2563eb;
       outline: 3px solid rgba(37, 99, 235, 0.14);
     }
@@ -124,15 +132,20 @@
     <div class="brand">
       <img src="assets/icon48.png" alt="">
       <div>
-        <p class="eyebrow">Groq API 설정</p>
+        <p class="eyebrow">AI API 설정</p>
         <h1>inton 설정</h1>
       </div>
     </div>
     <p>API Key는 이 브라우저의 확장 프로그램 저장소에만 저장됩니다. 웹페이지에서 실행되는 content script에는 전달되지 않습니다.</p>
 
     <form id="options-form">
-      <label for="api-key">Groq API Key</label>
-      <input id="api-key" name="api-key" type="password" autocomplete="off" placeholder="gsk_..." spellcheck="false">
+      <label for="api-key">Groq API Keys</label>
+      <textarea id="api-key" name="api-key" autocomplete="off" placeholder="gsk_...&#10;gsk_...&#10;gsk_..." spellcheck="false"></textarea>
+      <p>API Key를 여러 줄로 입력하면 위에서부터 순서대로 사용합니다. 한도가 끝난 키가 있으면 다음 키로 자동 전환합니다.</p>
+
+      <label for="cerebras-api-key">Cerebras API Keys</label>
+      <textarea id="cerebras-api-key" name="cerebras-api-key" autocomplete="off" placeholder="csk_...&#10;csk_..." spellcheck="false"></textarea>
+      <p>Cerebras 키도 여러 줄로 입력할 수 있습니다. Groq 키를 모두 사용할 수 없으면 Cerebras 키까지 같은 순환 목록에서 시도합니다.</p>
       <div class="actions">
         <button type="submit">저장</button>
         <button id="clear-key" type="button">삭제</button>

@@ -37,7 +37,8 @@ const stageOrder = [
   "extracting",      // 2: 기사 본문 다운로드 중
   "news_checking",   // 3: 뉴스 기사인지 AI 판별 중
   "analyzing",       // 4: 신뢰도·어그로도 분석 중
-  "complete"         // 5: 분석 완료
+  "complete",        // 5: 분석 완료
+  "not_article"      // 6: 뉴스 기사가 아닌 것으로 판별
 ];
 
 /*
@@ -166,6 +167,7 @@ function renderStatus(status = {}) {
   // stageOrder 배열에서 현재 단계의 위치(인덱스)를 찾음
   // indexOf()는 찾으면 인덱스(0~5), 못 찾으면 -1을 반환
   const activeIndex = stageOrder.indexOf(stage);
+  const terminalStage = stage === "complete" || stage === "not_article";
 
   // 각 텍스트 요소 내용 갱신
   // .textContent는 innerHTML과 달리 HTML 태그를 텍스트로 그대로 표시해서 XSS 위험이 없음
@@ -198,16 +200,16 @@ function renderStatus(status = {}) {
     const stepIndex = stageOrder.indexOf(element.dataset.stage);
 
     // is-active: 이 단계가 현재 진행 중인 단계인지
-    element.classList.toggle("is-active", stepIndex === activeIndex);
+    element.classList.toggle("is-active", stepIndex === activeIndex && !terminalStage);
 
     // is-done: 이 단계가 현재 단계보다 앞에 있는지 (이미 완료된 단계)
     // stepIndex >= 0 조건은 stageOrder에 없는 단계(indexOf = -1)가 done으로 처리되지 않도록 방지
     element.classList.toggle("is-done", activeIndex > stepIndex && stepIndex >= 0);
   });
 
-  // "뉴스 기사 아님" 또는 "오류" 상태에서는 진행 단계 표시를 모두 초기화
-  // 이 상태들은 정상적인 분석 흐름 밖에 있으므로 단계 표시가 의미가 없음
-  if (stage === "not_article" || stage === "error") {
+  // "오류" 상태에서는 진행 단계 표시를 모두 초기화
+  // 오류는 정상적인 분석 흐름 밖에 있으므로 단계 표시가 의미가 없음
+  if (stage === "error") {
     stepElements.forEach((element) => {
       element.classList.remove("is-active", "is-done");
     });

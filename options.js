@@ -32,6 +32,7 @@
 */
 let form;          // <form id="options-form"> — API 키 입력 폼 전체
 let apiKeyInput;   // <input id="api-key"> — API 키를 직접 입력하는 텍스트 박스
+let cerebrasApiKeyInput;
 let clearButton;   // <button id="clear-key"> — "삭제" 버튼
 let statusElement; // <p id="status"> — "저장되었습니다" 등 결과 메시지를 보여주는 단락
 
@@ -49,6 +50,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // 각 HTML 요소를 ID로 찾아서 변수에 저장
   form          = document.getElementById("options-form");
   apiKeyInput   = document.getElementById("api-key");
+  cerebrasApiKeyInput = document.getElementById("cerebras-api-key");
   clearButton   = document.getElementById("clear-key");
   statusElement = document.getElementById("status");
 
@@ -82,12 +84,30 @@ document.addEventListener("DOMContentLoaded", () => {
     해당 키가 없으면 items.groqApiKey는 undefined가 됩니다.
 */
 function loadSavedKey() {
-  chrome.storage.local.get(["groqApiKey"], (items) => {
+  chrome.storage.local.get(["groqApiKey", "groqApiKeys", "cerebrasApiKeys"], (items) => {
     // typeof items.groqApiKey === "string": 값이 실제 문자열인지 확인
     // items.groqApiKey가 빈 문자열("")인 경우는 표시할 필요가 없으므로 &&로 추가 확인
-    if (typeof items.groqApiKey === "string" && items.groqApiKey) {
-      apiKeyInput.value = items.groqApiKey; // 입력칸에 저장된 키 값 채우기
-      setStatus("저장된 API Key가 있습니다.");
+    const keys = Array.isArray(items.groqApiKeys)
+      ? items.groqApiKeys.filter((key) => typeof key === "string" && key.trim())
+      : [];
+    const legacyKey = typeof items.groqApiKey === "string" && items.groqApiKey.trim()
+      ? [items.groqApiKey.trim()]
+      : [];
+    const savedKeys = keys.length ? keys : legacyKey;
+
+    if (savedKeys.length) {
+      apiKeyInput.value = savedKeys.join("\n"); // 입력칸에 저장된 키 값 채우기
+    }
+
+    const cerebrasKeys = Array.isArray(items.cerebrasApiKeys)
+      ? items.cerebrasApiKeys.filter((key) => typeof key === "string" && key.trim())
+      : [];
+    if (cerebrasKeys.length) {
+      cerebrasApiKeyInput.value = cerebrasKeys.join("\n");
+    }
+
+    if (savedKeys.length || cerebrasKeys.length) {
+      setStatus(`저장된 API Key가 Groq ${savedKeys.length}개, Cerebras ${cerebrasKeys.length}개 있습니다.`);
     }
   });
 }
@@ -110,11 +130,12 @@ function saveApiKey(event) {
   event.preventDefault(); // 폼의 기본 페이지 이동/새로고침 동작 차단
 
   // .trim(): 실수로 앞뒤에 공백을 넣었을 때 자동으로 제거
-  const apiKey = apiKeyInput.value.trim();
+  const apiKeys = parseApiKeys(apiKeyInput.value);
+  const cerebrasApiKeys = parseApiKeys(cerebrasApiKeyInput.value);
 
   // 빈 값이면 저장하지 않고 오류 메시지 표시
-  if (!apiKey) {
-    setStatus("API Key를 입력하세요.", true); // true = 오류 상황 (빨간색 표시)
+  if (!apiKeys.length && !cerebrasApiKeys.length) {
+    setStatus("API Key를 1개 이상 입력하세요.", true); // true = 오류 상황 (빨간색 표시)
     return; // 여기서 함수 종료, 아래 저장 코드 실행 안 함
   }
 
@@ -123,8 +144,16 @@ function saveApiKey(event) {
     저장소에 데이터를 저장합니다. 저장이 완료되면 콜백이 호출됩니다.
     여기서 저장한 값을 background.js의 getGroqApiKey()가 나중에 읽어서 사용합니다.
   */
-  chrome.storage.local.set({ groqApiKey: apiKey }, () => {
-    setStatus("API Key를 저장했습니다."); // 저장 완료 메시지
+  chrome.storage.local.set({
+    groqApiKeys: apiKeys,
+    groqApiKey: apiKeys[0] || "",
+    cerebrasApiKeys,
+    groqActiveKeyIndex: 0,
+    aiActiveCredentialIndex: 0
+  }, () => {
+    apiKeyInput.value = apiKeys.join("\n");
+    cerebrasApiKeyInput.value = cerebrasApiKeys.join("\n");
+    setStatus(`API Key를 Groq ${apiKeys.length}개, Cerebras ${cerebrasApiKeys.length}개 저장했습니다.`); // 저장 완료 메시지
   });
 }
 
@@ -142,10 +171,26 @@ function saveApiKey(event) {
     삭제가 완료되면 콜백이 호출됩니다.
 */
 function clearApiKey() {
-  chrome.storage.local.remove(["groqApiKey"], () => {
+  chrome.storage.local.remove(["groqApiKey", "groqApiKeys", "cerebrasApiKeys", "groqActiveKeyIndex", "aiActiveCredentialIndex"], () => {
     apiKeyInput.value = ""; // 입력칸 비우기
+    cerebrasApiKeyInput.value = "";
     setStatus("API Key를 삭제했습니다.");
   });
+}
+
+function parseApiKeys(value) {
+  const seen = new Set();
+  return String(value || "")
+    .split(/[\s,;]+/)
+    .map((key) => key.trim())
+    .filter(Boolean)
+    .filter((key) => {
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 }
 
 
