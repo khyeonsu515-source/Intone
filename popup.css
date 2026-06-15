@@ -1421,7 +1421,7 @@
    Top metric color badges
    ===================================================================== */
 #ai-news-link-popup .inton-status-pill {
-  grid-template-columns: auto minmax(76px, 1fr) 1px minmax(76px, 1fr);
+  grid-template-columns: auto minmax(58px, auto) 1px minmax(58px, auto);
   gap: 6px;
 }
 
@@ -1432,7 +1432,7 @@
 
 #ai-news-link-popup .inton-metric {
   display: grid;
-  grid-template-columns: 16px auto 1fr;
+  grid-template-columns: 16px auto;
   min-width: 0;
   height: 30px;
   padding: 0 7px;
@@ -1455,7 +1455,7 @@
 }
 
 #ai-news-link-popup .inton-metric strong {
-  justify-self: end;
+  justify-self: start;
   min-width: 28px;
   padding: 2px 6px;
   border-radius: 999px;
@@ -1522,7 +1522,350 @@
   }
 
   #ai-news-link-popup .inton-metric {
-    grid-template-columns: 15px auto 1fr;
+    grid-template-columns: 15px auto;
     padding: 0 6px;
   }
+}
+
+/* 상단 요약 바에서는 아이콘 옆 등급만 표시 */
+#ai-news-link-popup .inton-compact-bar .inton-metric b {
+  display: none !important;
+}
+
+/* =====================================================================
+   Hover summary reveal
+   - 분석 결과가 처음 표시될 때는 상단 요약 바만 보임
+   - 마우스가 팝업 안으로 들어오면 요약 카드가 자연스럽게 펼쳐짐
+   - 화살표 UI는 사용하지 않음
+   ===================================================================== */
+#ai-news-link-popup.ai-news-popup--summary-collapsed {
+  overflow: visible;
+}
+
+#ai-news-link-popup .inton-summary-reveal {
+  display: grid;
+  place-items: center;
+  justify-self: center;
+  width: 38px;
+  height: 22px;
+  margin: -2px 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #475569;
+  cursor: pointer;
+  font-size: 19px;
+  font-weight: 950;
+  line-height: 1;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  transform: translateY(0);
+  transition: transform 180ms ease, opacity 180ms ease, box-shadow 180ms ease, background 180ms ease;
+  animation: inton-reveal-arrow-float 1150ms ease-in-out infinite;
+}
+
+#ai-news-link-popup .inton-summary-reveal:hover {
+  background: #ffffff;
+  color: #2563eb;
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+#ai-news-link-popup.ai-news-popup--summary-collapsed .inton-summary-card,
+#ai-news-link-popup.ai-news-popup--summary-collapsed .inton-detail-card {
+  display: block;
+  max-height: 0;
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-8px) scale(0.98);
+  overflow: hidden;
+  transition: max-height 320ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 220ms ease, transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1), margin 220ms ease, padding 220ms ease;
+}
+
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-summary-card,
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-detail-card {
+  max-height: 900px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  animation: inton-summary-rise 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-summary-reveal {
+  opacity: 0;
+  transform: scale(0.82);
+  pointer-events: none;
+  animation: none;
+}
+
+#ai-news-link-popup[data-summary-direction="down"] .inton-compact-bar { order: 1; }
+#ai-news-link-popup[data-summary-direction="down"] .inton-summary-reveal { order: 2; }
+#ai-news-link-popup[data-summary-direction="down"] .inton-summary-card { order: 3; }
+#ai-news-link-popup[data-summary-direction="down"] .inton-detail-card { order: 4; }
+
+#ai-news-link-popup[data-summary-direction="up"] .inton-summary-card { order: 1; }
+#ai-news-link-popup[data-summary-direction="up"] .inton-detail-card { order: 2; }
+#ai-news-link-popup[data-summary-direction="up"] .inton-summary-reveal { order: 3; }
+#ai-news-link-popup[data-summary-direction="up"] .inton-compact-bar { order: 4; }
+
+#ai-news-link-popup[data-summary-direction="up"].ai-news-popup--summary-collapsed .inton-summary-card,
+#ai-news-link-popup[data-summary-direction="up"].ai-news-popup--summary-collapsed .inton-detail-card {
+  transform: translateY(8px) scale(0.98);
+}
+
+#ai-news-link-popup[data-summary-direction="up"].ai-news-popup--summary-expanded .inton-summary-card,
+#ai-news-link-popup[data-summary-direction="up"].ai-news-popup--summary-expanded .inton-detail-card {
+  animation-name: inton-summary-drop;
+}
+
+@keyframes inton-reveal-arrow-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
+}
+
+#ai-news-link-popup[data-summary-direction="up"] .inton-summary-reveal {
+  animation-name: inton-reveal-arrow-float-up;
+}
+
+@keyframes inton-reveal-arrow-float-up {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+
+@keyframes inton-summary-rise {
+  from { opacity: 0; transform: translateY(-10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes inton-summary-drop {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* =====================================================================
+   Popup safety zone + motion polish
+   - 팝업 주변으로 살짝 벗어나도 유지
+   - 닫힐 때 자연스럽게 사라짐
+   - 화면 가장자리 보정 등 위치가 바뀔 때 부드럽게 이동
+   ===================================================================== */
+#ai-news-link-popup.ai-news-popup {
+  will-change: left, top, transform, opacity;
+  transition:
+    left 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    top 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 180ms ease,
+    opacity 180ms ease,
+    filter 180ms ease,
+    box-shadow 180ms ease;
+}
+
+#ai-news-link-popup.ai-news-popup--moving:not(.ai-news-popup--closing) {
+  transform: translateY(-2px) scale(1.006);
+}
+
+#ai-news-link-popup.ai-news-popup--closing {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(8px) scale(0.965);
+  filter: blur(2px);
+  transition:
+    transform 210ms cubic-bezier(0.4, 0, 1, 1),
+    opacity 180ms ease,
+    filter 180ms ease;
+}
+
+#ai-news-link-popup[data-summary-direction="up"].ai-news-popup--closing {
+  transform: translateY(-8px) scale(0.965);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #ai-news-link-popup.ai-news-popup,
+  #ai-news-link-popup.ai-news-popup--closing,
+  #ai-news-link-popup.ai-news-popup--moving {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+    filter: none !important;
+  }
+}
+
+
+/* 화살표 제거: 팝업 안으로 마우스 진입 시 요약 카드가 열리도록 단순화 */
+#ai-news-link-popup .inton-summary-reveal {
+  display: none !important;
+}
+
+#ai-news-link-popup.ai-news-popup--summary-collapsed .inton-compact-bar {
+  cursor: default;
+}
+
+/* =====================================================================
+   Anchored summary reveal refinement
+   - 상단 간단 분석 바는 거의 고정
+   - 요약 카드는 남은 공간에 따라 위/아래에 별도 팝업처럼 생성
+   ===================================================================== */
+#ai-news-link-popup.ai-news-popup--anchoring-summary {
+  transition:
+    transform 180ms ease,
+    opacity 180ms ease,
+    filter 180ms ease,
+    box-shadow 180ms ease !important;
+}
+
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-compact-bar {
+  position: relative;
+  z-index: 3;
+}
+
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-summary-card {
+  position: relative;
+  z-index: 2;
+  will-change: transform, opacity, max-height;
+}
+
+#ai-news-link-popup[data-summary-direction="down"].ai-news-popup--summary-expanded .inton-summary-card {
+  transform-origin: top center;
+  animation: inton-summary-card-open-down 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#ai-news-link-popup[data-summary-direction="up"].ai-news-popup--summary-expanded .inton-summary-card {
+  transform-origin: bottom center;
+  animation: inton-summary-card-open-up 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#ai-news-link-popup[data-summary-direction="down"].ai-news-popup--summary-collapsed .inton-summary-card {
+  transform: translateY(-10px) scale(0.985);
+}
+
+#ai-news-link-popup[data-summary-direction="up"].ai-news-popup--summary-collapsed .inton-summary-card {
+  transform: translateY(10px) scale(0.985);
+}
+
+@keyframes inton-summary-card-open-down {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.985);
+    filter: blur(1.5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes inton-summary-card-open-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+    filter: blur(1.5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+/* =====================================================================
+   Detail view stability fix
+   - 상세보기는 버튼으로만 열고 닫음
+   - 스크롤/위치 보정 때문에 요약 카드가 자동 최소화되는 문제 방지
+   ===================================================================== */
+#ai-news-link-popup .inton-detail-card.ai-news-popup__details {
+  display: block;
+  max-height: 0;
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+  transform: translateY(-8px) scale(0.985);
+  transition:
+    max-height 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 200ms ease,
+    transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin 200ms ease,
+    padding 200ms ease,
+    border-width 200ms ease;
+}
+
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-detail-card.ai-news-popup__details.is-open {
+  max-height: min(620px, calc(100vh - 150px));
+  margin-top: 0;
+  padding: 12px;
+  border-width: 1px;
+  opacity: 1;
+  pointer-events: auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  transform: translateY(0) scale(1);
+}
+
+#ai-news-link-popup[data-summary-direction="up"] .inton-detail-card.ai-news-popup__details {
+  transform: translateY(8px) scale(0.985);
+}
+
+#ai-news-link-popup[data-summary-direction="up"].ai-news-popup--summary-expanded .inton-detail-card.ai-news-popup__details.is-open {
+  transform: translateY(0) scale(1);
+}
+
+#ai-news-link-popup .inton-detail-summary {
+  user-select: none;
+  cursor: default;
+  margin: 0 0 12px;
+}
+
+#ai-news-link-popup .inton-detail-summary::-webkit-details-marker {
+  display: none;
+}
+
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-summary-card {
+  overflow: visible;
+}
+
+#ai-news-link-popup .inton-detail-button[aria-expanded="true"] {
+  background: linear-gradient(135deg, #475569, #1e293b);
+  border-color: #334155;
+  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.18);
+}
+
+/* =====================================================================
+   Viewport containment fix
+   - 팝업/요약/상세가 펼쳐져도 화면 밖으로 나가지 않게 제한
+   - 상세 내용은 카드 내부에서 스크롤
+   ===================================================================== */
+#ai-news-link-popup.ai-news-popup {
+  max-width: calc(100vw - 16px) !important;
+  max-height: var(--inton-popup-max-height, calc(100vh - 16px)) !important;
+}
+
+#ai-news-link-popup.ai-news-popup--separated {
+  max-height: var(--inton-popup-max-height, calc(100vh - 16px)) !important;
+}
+
+#ai-news-link-popup .inton-mini-shell {
+  max-height: var(--inton-popup-max-height, calc(100vh - 16px));
+  overflow: visible;
+}
+
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-summary-card {
+  max-height: var(--inton-summary-max-height, 420px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+#ai-news-link-popup.ai-news-popup--summary-expanded .inton-detail-card.ai-news-popup__details.is-open {
+  max-height: var(--inton-detail-max-height, min(620px, calc(100vh - 150px))) !important;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+#ai-news-link-popup .inton-summary-body,
+#ai-news-link-popup .inton-detail-card {
+  min-height: 0;
 }

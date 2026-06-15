@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Intone",
   "version": "1.1.0",
-  "description": "AI 기반 기사 신뢰도와 제목 어그로 지수를 분석합니다. (into news)",
+  "description": "AI 기반 기사 신뢰도와 제목 어그로 지수를 분석합니다.",
   "permissions": [
     "storage"
   ],
