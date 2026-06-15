@@ -1,4 +1,4 @@
-# inton
+# Intone
 
 웹페이지의 뉴스 링크 위에 마우스를 800ms 이상 올려두면 Groq 또는 Cerebras API로 기사 여부, 신뢰도, 어그로도를 분석해 커서 옆 팝업에 보여주는 Chrome Extension Manifest V3 프로젝트입니다.
 

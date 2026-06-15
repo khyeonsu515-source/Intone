@@ -491,7 +491,7 @@ function toggleDetails(button) {
     suppressPopupMouseOutUntil = Date.now() + POPUP_INTERACTION_GRACE_MS;
     details.open = !details.open; // true면 false로, false면 true로 반전
     if (button) {
-      button.textContent = details.open ? "간략히 보기" : "상세 정보 보기";
+      button.textContent = details.open ? "세부 분석 접기" : "세부 분석 보기";
     }
     keepPopupInViewport();
   }
@@ -534,7 +534,7 @@ function handlePopupMouseOut(event) {
 */
 function showLoadingPopup(x, y, message = "AI 분석 중...") {
   const popupElement = ensurePopup();
-  popupElement.className = "ai-news-popup ai-news-popup--loading";
+  popupElement.className = "ai-news-popup ai-news-popup--loading ai-news-popup--separated";
   popupElement.innerHTML = `
     <section class="news-ai-card">
       ${renderBrandHeader()}
@@ -604,16 +604,23 @@ function showErrorPopup(message) {
 function showResultPopup(result) {
   const popupElement = ensurePopup();
 
-  // 뉴스 기사가 아닌 경우
   if (!result.is_article) {
-    popupElement.className = "ai-news-popup";
+    popupElement.className = "ai-news-popup ai-news-popup--result ai-news-popup--separated";
     popupElement.innerHTML = `
-      <section class="news-ai-card">
-        ${renderBrandHeader("뉴스 기사 아님")}
-        <div class="news-ai-summary">
-          ${renderSummaryLines(result.summary || "이 링크는 뉴스 기사로 보기 어렵습니다.", result.warning || "뉴스 기사 링크에서 다시 시도하세요.")}
-        </div>
-        ${renderActions(false)}
+      <section class="inton-mini-shell">
+        ${renderCompactTopBar("보통", "보통")}
+        <section class="inton-summary-card">
+          <header class="inton-card-head">
+            ${renderMetricIcon("summary")}
+            <h2>기사 요약</h2>
+            <button class="inton-close" type="button" aria-label="닫기">×</button>
+          </header>
+          <div class="inton-summary-body">
+            <p>${escapeHtml(result.summary || "이 링크는 뉴스 기사로 보기 어렵습니다.")}</p>
+            <p class="inton-muted">${escapeHtml(result.warning || "뉴스 기사 링크에서 다시 시도하세요.")}</p>
+          </div>
+          ${renderActions(false)}
+        </section>
       </section>
     `;
     popupElement.hidden = false;
@@ -622,54 +629,66 @@ function showResultPopup(result) {
     return;
   }
 
-  // 점수를 0~100 범위의 정수로 보정
   const credibilityScore = toScore(result.credibility_score);
   const clickbaitScore   = toScore(result.clickbait_score);
-  // 점수에 따른 등급 (예: 80 이상 → "높은 신뢰", className: "good")
   const credibilityLevel = getCredibilityLevel(credibilityScore);
   const clickbaitLevel   = getClickbaitLevel(clickbaitScore);
+  const credibilityShort = getCredibilityShortLabel(credibilityScore);
+  const clickbaitShort   = getClickbaitShortLabel(clickbaitScore);
 
-  popupElement.className = "ai-news-popup";
+  popupElement.className = "ai-news-popup ai-news-popup--result ai-news-popup--separated";
   popupElement.innerHTML = `
-    <section class="news-ai-card">
-      ${renderBrandHeader("분석 완료")}
-      <div class="news-ai-score-grid">
-        <div class="news-ai-score-card news-ai-score-card--${credibilityLevel.className}">
-          <p class="news-ai-kicker">신뢰도</p>
-          <strong>${credibilityScore}<span>/100</span></strong>
-          <small>${credibilityLevel.label}</small>
+    <section class="inton-mini-shell">
+      ${renderCompactTopBar(credibilityShort, clickbaitShort)}
+
+      <section class="inton-summary-card">
+        <header class="inton-card-head">
+          ${renderMetricIcon("summary")}
+          <h2>기사 요약</h2>
+          <button class="inton-close" type="button" aria-label="닫기">×</button>
+        </header>
+        <div class="inton-summary-body">
+          <p>${escapeHtml(result.article_summary || result.summary || "기사 요약을 생성하지 못했습니다.")}</p>
+          ${result.warning ? `<p class="inton-muted">${escapeHtml(result.warning)}</p>` : ""}
         </div>
-        <div class="news-ai-score-card news-ai-score-card--clickbait">
-          <p class="news-ai-kicker">제목 어그로 지수</p>
-          <strong>${clickbaitScore}<span>/100</span></strong>
-          <small>${clickbaitLevel.label}</small>
+        ${renderActions(true)}
+      </section>
+
+      <details class="inton-detail-card ai-news-popup__details">
+        <summary class="inton-detail-summary">세부 분석</summary>
+        <div class="inton-detail-grid">
+          ${renderScorePanel({
+            type: "credibility",
+            title: "신뢰도 분석",
+            score: credibilityScore,
+            level: credibilityLevel.label,
+            shortLabel: credibilityShort,
+            breakdown: result.credibility_breakdown,
+            rows: [
+              ["source_clarity", "공식 출처 인용", 20],
+              ["title_body_match", "제목/본문 일치", 25],
+              ["evidence_quality", "근거 충실도", 25],
+              ["neutrality", "객관적 표현 사용", 15],
+              ["context", "맥락 제공성", 15]
+            ]
+          })}
+          ${renderScorePanel({
+            type: "clickbait",
+            title: "어그로도 분석",
+            score: clickbaitScore,
+            level: clickbaitLevel.label,
+            shortLabel: clickbaitShort,
+            breakdown: result.clickbait_breakdown,
+            rows: [
+              ["exaggeration", "과장된 표현", 20],
+              ["curiosity_gap", "궁금증 유도", 20],
+              ["title_body_mismatch", "선정적 제목", 25],
+              ["emotional_trigger", "감정 자극", 20],
+              ["hidden_key_info", "핵심 정보 은폐", 15]
+            ]
+          })}
         </div>
-      </div>
-      <div class="news-ai-article-summary">
-        <p class="news-ai-kicker">기사 한 줄 요약</p>
-        <strong>${escapeHtml(result.article_summary || "기사 요약을 생성하지 못했습니다.")}</strong>
-      </div>
-      <div class="news-ai-summary">
-        ${renderSummaryLines(result.summary || "요약 정보가 없습니다.", result.warning || "AI 분석은 참고용입니다.")}
-      </div>
-      <details class="news-ai-details ai-news-popup__details">
-        <summary>세부 항목</summary>
-        ${renderBreakdown("신뢰도", result.credibility_breakdown, [
-          ["source_clarity",  "출처 명확성",    20],
-          ["title_body_match","제목/본문 일치도", 25],
-          ["evidence_quality","근거 충실도",     25],
-          ["neutrality",      "표현 중립성",     15],
-          ["context",         "맥락 제공성",     15]
-        ])}
-        ${renderBreakdown("어그로도", result.clickbait_breakdown, [
-          ["exaggeration",       "과장 표현",      20],
-          ["curiosity_gap",      "궁금증 유도",    20],
-          ["title_body_mismatch","제목/본문 불일치",25],
-          ["emotional_trigger",  "감정 자극",      20],
-          ["hidden_key_info",    "핵심 정보 은폐", 15]
-        ])}
       </details>
-      ${renderActions(true)}
     </section>
   `;
   popupElement.hidden = false;
@@ -691,6 +710,114 @@ function showResultPopup(result) {
   예) "chrome-extension://확장ID/assets/icon48.png"
   이 URL은 manifest.json의 web_accessible_resources에 등록된 파일만 사용 가능합니다.
 */
+
+function getCredibilityShortLabel(score) {
+  const normalized = toScore(score);
+  if (normalized >= 80) return "높음";
+  if (normalized >= 50) return "보통";
+  return "낮음";
+}
+
+function getClickbaitShortLabel(score) {
+  const normalized = toScore(score);
+  if (normalized <= 40) return "낮음";
+  if (normalized <= 60) return "보통";
+  return "높음";
+}
+
+function renderCompactTopBar(credibilityLabel, clickbaitLabel) {
+  const logoUrl = chrome.runtime.getURL("assets/logo.png");
+  const credibilityTone = getCompactMetricTone("trust", credibilityLabel);
+  const clickbaitTone = getCompactMetricTone("bait", clickbaitLabel);
+  return `
+    <header class="inton-compact-bar" aria-label="Intone 분석 결과 요약">
+      <div class="inton-logo-pill" aria-hidden="true">
+        <img src="${escapeHtml(logoUrl)}" alt="">
+      </div>
+      <div class="inton-status-pill">
+        <span class="inton-brand">Intone</span>
+        <span class="inton-metric inton-metric--trust inton-metric--${escapeHtml(credibilityTone)}">
+          ${renderMetricIcon("shield")}
+          <b>신뢰</b>
+          <strong>${escapeHtml(credibilityLabel)}</strong>
+        </span>
+        <span class="inton-divider" aria-hidden="true"></span>
+        <span class="inton-metric inton-metric--bait inton-metric--${escapeHtml(clickbaitTone)}">
+          ${renderMetricIcon("fire")}
+          <b>어그로</b>
+          <strong>${escapeHtml(clickbaitLabel)}</strong>
+        </span>
+      </div>
+    </header>
+  `;
+}
+
+function getCompactMetricTone(type, label) {
+  if (type === "trust") {
+    if (label === "높음") return "good";
+    if (label === "낮음") return "bad";
+    return "medium";
+  }
+
+  if (label === "낮음") return "good";
+  if (label === "높음") return "bad";
+  return "medium";
+}
+
+function renderMetricIcon(type) {
+  if (type === "shield") {
+    return `<span class="inton-icon inton-icon--shield" aria-hidden="true"><svg viewBox="0 0 24 24" role="img"><path d="M12 2.5 20 5.5V11c0 5.1-3.3 8.9-8 10.5C7.3 19.9 4 16.1 4 11V5.5l8-3Z"/><path d="M12 5v13.1c3.1-1.3 5.2-4 5.2-7.1V7.3L12 5Z" opacity=".42"/></svg></span>`;
+  }
+  if (type === "fire") {
+    return `<span class="inton-icon inton-icon--fire" aria-hidden="true"><svg viewBox="0 0 24 24" role="img"><path d="M13.2 2.5c.6 3.2-.7 4.8-2.2 6.4-1.3 1.4-2.8 2.9-2.8 5.3 0 3.9 3.1 6.8 7 6.8s6.8-2.8 6.8-6.8c0-3.1-1.7-5.4-3.8-7.2.2 2.1-.7 3.5-2 4.5.2-3.4-1.1-6.5-3-9Z"/><path d="M12.2 13c-1.5 1.4-2.2 2.3-2.2 4 0 2 1.6 3.5 3.7 3.5s3.8-1.5 3.8-3.6c0-1.6-.9-2.8-2.1-3.8-.1 1.3-.6 2.2-1.6 3 .1-1.5-.4-2.5-1.6-3.1Z" opacity=".4"/></svg></span>`;
+  }
+  return `<span class="inton-icon inton-icon--summary" aria-hidden="true"><svg viewBox="0 0 24 24" role="img"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/></svg></span>`;
+}
+
+function renderScorePanel({ type, title, score, shortLabel, breakdown = {}, rows }) {
+  const isTrust = type === "credibility";
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const iconType = isTrust ? "shield" : "fire";
+  return `
+    <section class="inton-score-panel inton-score-panel--${escapeHtml(type)}">
+      <header class="inton-score-head">
+        <div class="inton-score-title">
+          ${renderMetricIcon(iconType)}
+          <h3>${escapeHtml(title)}</h3>
+        </div>
+        <div class="inton-score-number"><span>점수</span><b>${toScore(score)}</b><small>/100</small></div>
+      </header>
+      <div class="inton-score-body">
+        <div class="inton-donut" style="--score:${toScore(score)};" aria-label="${escapeHtml(title)} ${toScore(score)}점">
+          <strong>${toScore(score)}</strong>
+          <span>/100</span>
+        </div>
+        <div class="inton-score-list">
+          ${safeRows.map(([key, label, max]) => renderScoreRow(key, label, max, breakdown, type)).join("")}
+        </div>
+      </div>
+      <div class="inton-score-note">
+        <span class="inton-bulb" aria-hidden="true">💡</span>
+        ${escapeHtml(isTrust
+          ? `전반적으로 신뢰도는 ${shortLabel} 수준입니다.`
+          : `전반적으로 어그로도는 ${shortLabel} 수준입니다.`)}
+      </div>
+    </section>
+  `;
+}
+
+function renderScoreRow(key, label, max, breakdown, type) {
+  const value = Number.isFinite(Number(breakdown?.[key])) ? Number(breakdown[key]) : 0;
+  const percent = max ? Math.max(0, Math.min(100, Math.round((value / max) * 100))) : 0;
+  return `
+    <div class="inton-score-row inton-score-row--${escapeHtml(type)}">
+      <span>${escapeHtml(label)}</span>
+      <i><em style="width:${percent}%"></em></i>
+      <b>${value}/${max}</b>
+    </div>
+  `;
+}
+
 function renderBrandHeader(statusText = "AI 기반 기사 신뢰도 분석") {
   const logoUrl = chrome.runtime.getURL("assets/icon48.png");
   return `
@@ -699,7 +826,7 @@ function renderBrandHeader(statusText = "AI 기반 기사 신뢰도 분석") {
         <img src="${escapeHtml(logoUrl)}" alt="">
       </div>
       <div>
-        <h1>inton</h1>
+        <h1>Intone</h1>
         <p>${escapeHtml(statusText)}</p>
       </div>
     </header>
@@ -733,8 +860,8 @@ function renderSummaryLines(summary, warning) {
 */
 function renderActions(hasDetails) {
   return `
-    <div class="news-ai-actions">
-      <button class="news-ai-button news-ai-button--primary" type="button" data-ai-news-action="toggle-details" ${hasDetails ? "" : "disabled"}>상세 정보 보기</button>
+    <div class="inton-actions">
+      <button class="inton-detail-button" type="button" data-ai-news-action="toggle-details" ${hasDetails ? "" : "disabled"}>세부 분석 보기</button>
     </div>
   `;
 }
@@ -789,69 +916,57 @@ function renderBreakdown(title, breakdown = {}, rows) {
     - keepPopupInViewport: 스크롤/리사이즈 시 재계산
 */
 function positionPopup(clientX, clientY) {
-  const popupElement   = ensurePopup();
-  const margin         = 10;  // 커서와 팝업 사이의 여백 (픽셀)
-  const viewportPadding = 10; // 화면 가장자리와 팝업 사이의 최소 여백
-  popupAnchor = { x: clientX, y: clientY }; // 나중에 재계산할 때 사용하도록 저장
+  const popupElement = ensurePopup();
+  const margin = 8;
+  const viewportPadding = 8;
+  popupAnchor = { x: clientX, y: clientY };
 
-  // 팝업이 화면보다 커지지 않도록 최대 크기 설정
-  popupElement.style.maxWidth  = `${Math.max(220, window.innerWidth  - viewportPadding * 2)}px`;
-  popupElement.style.maxHeight = `${Math.max(180, window.innerHeight - viewportPadding * 2)}px`;
+  const availableWidth = Math.max(1, window.innerWidth - viewportPadding * 2);
+  const availableHeight = Math.max(1, window.innerHeight - viewportPadding * 2);
+  popupElement.style.maxWidth = `${availableWidth}px`;
+  popupElement.style.maxHeight = `${availableHeight}px`;
 
-  // 현재 팝업의 실제 크기 측정 (위에서 maxWidth/maxHeight를 설정했으므로 반영됨)
-  const rect   = popupElement.getBoundingClientRect();
-  const width  = Math.min(rect.width,  window.innerWidth  - viewportPadding * 2);
-  const height = Math.min(rect.height, window.innerHeight - viewportPadding * 2);
+  const rect = popupElement.getBoundingClientRect();
+  const width = Math.min(rect.width, availableWidth);
+  const height = Math.min(rect.height, availableHeight);
 
-  // 커서를 기준으로 4가지 배치 후보 좌표 계산
   const candidates = [
-    { name: "right-bottom", left: clientX + margin,         top: clientY + margin          },
-    { name: "right-top",    left: clientX + margin,         top: clientY - height - margin },
-    { name: "left-bottom",  left: clientX - width - margin, top: clientY + margin          },
-    { name: "left-top",     left: clientX - width - margin, top: clientY - height - margin }
+    { name: "right-bottom", left: clientX + margin, top: clientY + margin },
+    { name: "right-top", left: clientX + margin, top: clientY - height - margin },
+    { name: "left-bottom", left: clientX - width - margin, top: clientY + margin },
+    { name: "left-top", left: clientX - width - margin, top: clientY - height - margin }
   ];
 
-  // 각 후보가 화면 밖으로 얼마나 나가는지(overflow) 계산해서 가장 적은 것 선택
   const best = candidates
     .map((candidate) => {
-      // 네 방향 각각의 넘침량을 더해서 총 overflow 계산
       const overflow =
-        Math.max(0, viewportPadding - candidate.left) +                                   // 왼쪽으로 넘침
-        Math.max(0, viewportPadding - candidate.top) +                                    // 위쪽으로 넘침
-        Math.max(0, candidate.left + width  - (window.innerWidth  - viewportPadding)) +   // 오른쪽으로 넘침
-        Math.max(0, candidate.top  + height - (window.innerHeight - viewportPadding));    // 아래쪽으로 넘침
-
-      // 기존 객체에 overflow 속성만 추가한 새 객체 반환
-      // ... (스프레드 연산자): 객체를 복사하면서 추가 속성 붙이기
+        Math.max(0, viewportPadding - candidate.left) +
+        Math.max(0, viewportPadding - candidate.top) +
+        Math.max(0, candidate.left + width - (window.innerWidth - viewportPadding)) +
+        Math.max(0, candidate.top + height - (window.innerHeight - viewportPadding));
       return { ...candidate, overflow };
     })
-    .sort((a, b) => a.overflow - b.overflow)[0]; // overflow 오름차순 정렬 후 첫 번째 (가장 작은) 선택
+    .sort((a, b) => a.overflow - b.overflow)[0];
 
-  // 최종 좌표를 화면 경계 안으로 한 번 더 보정
-  const left = Math.min(
-    Math.max(viewportPadding, best.left),
-    Math.max(viewportPadding, window.innerWidth  - width  - viewportPadding)
-  );
-  const top = Math.min(
-    Math.max(viewportPadding, best.top),
-    Math.max(viewportPadding, window.innerHeight - height - viewportPadding)
-  );
+  const minLeft = viewportPadding;
+  const minTop = viewportPadding;
+  const maxLeft = Math.max(minLeft, window.innerWidth - width - viewportPadding);
+  const maxTop = Math.max(minTop, window.innerHeight - height - viewportPadding);
+  const left = clampNumber(best.left, minLeft, maxLeft);
+  const top = clampNumber(best.top, minTop, maxTop);
 
-  // data-placement 속성 설정 (CSS에서 방향에 따른 세밀한 스타일 조정에 사용 가능)
   popupElement.dataset.placement = best.name;
   popupElement.style.left = `${left}px`;
-  popupElement.style.top  = `${top}px`;
+  popupElement.style.top = `${top}px`;
 }
 
-/*
-  keepPopupInViewport: 창 크기가 바뀌거나 스크롤됐을 때
-  팝업 위치를 다시 계산해서 화면 안에 유지합니다.
-  requestAnimationFrame: 다음 화면 렌더링 직전에 실행해서
-  레이아웃 재계산과 화면 그리기가 한 번에 이루어지도록 최적화합니다.
-*/
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function keepPopupInViewport() {
   if (!popup || popup.hidden || !popupAnchor) {
-    return; // 팝업이 없거나 숨겨진 상태면 아무것도 안 함
+    return;
   }
 
   window.requestAnimationFrame(() => {
@@ -870,7 +985,7 @@ function hidePopup() {
   if (popup) {
     popup.hidden = true;
   }
-  popupAnchor = null; // 위치 기준점도 초기화
+  popupAnchor = null;
   popupOpenPoint = null;
 }
 
