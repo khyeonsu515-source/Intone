@@ -1,3 +1,6 @@
+const POPUP_SCALE_STORAGE_KEY = "intonePopupScalePercent";
+const DEFAULT_POPUP_SCALE_PERCENT = 100;
+
 /*
   =====================================================================
   options.js
@@ -212,3 +215,32 @@ function setStatus(message, isError = false) {
   // 삼항 연산자: 조건 ? 참일 때 값 : 거짓일 때 값
   statusElement.style.color = isError ? "#a43131" : "#12633d";
 }
+
+
+function normalizePopupScalePercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_POPUP_SCALE_PERCENT;
+  }
+  return Math.max(70, Math.min(130, Math.round(numeric)));
+}
+
+function initPopupScaleOption() {
+  const select = document.getElementById("popup-scale-percent");
+  if (!select) {
+    return;
+  }
+
+  chrome.storage.local.get([POPUP_SCALE_STORAGE_KEY], (items) => {
+    select.value = String(normalizePopupScalePercent(items[POPUP_SCALE_STORAGE_KEY]));
+  });
+
+  select.addEventListener("change", () => {
+    chrome.storage.local.set({
+      [POPUP_SCALE_STORAGE_KEY]: normalizePopupScalePercent(select.value)
+    });
+  });
+}
+
+document.addEventListener("DOMContentLoaded", initPopupScaleOption);
+

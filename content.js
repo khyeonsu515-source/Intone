@@ -10,7 +10,7 @@
   이 파일이 하는 일:
   1. 페이지의 모든 링크에 마우스가 올라가면 감지합니다.
   2. 1초 이상 머물면 background.js에 분석을 요청합니다.
-  3. 분석 결과(또는 로딩/오류 상태)를 팝업 형태로 화면에 띄웁니다.
+  3. 팝업은 같은 링크 위에 2초 이상 머문 경우에만 화면에 띄웁니다.
   4. 마우스가 링크에서 벗어나면 팝업을 닫습니다.
 
   ★ 다른 파일과의 관계
@@ -30,6 +30,10 @@
 // 마우스를 링크 위에 이 시간(ms) 동안 올려두면 분석을 시작
 const HOVER_DELAY_MS = 1000;
 
+// 분석 요청은 1초 뒤 시작하지만, 사용자에게 보이는 팝업은
+// 링크 위에 2초 이상 머문 경우에만 표시합니다.
+const POPUP_DISPLAY_DELAY_MS = 2000;
+
 const UNKNOWN_NEWS_DELAY_MS = 4000;
 
 // AI에게 넘기는 링크 텍스트의 최대 길이 (토큰 절약용)
@@ -45,7 +49,28 @@ const POPUP_CLOSE_ANIMATION_MS = 210;
 
 // 위치가 보정될 때 움직임 애니메이션 표시 시간
 const POPUP_REPOSITION_ANIMATION_MS = 240;
+const POPUP_APPEAR_ANIMATION_MS = 220;
 const POPUP_VIEWPORT_PADDING_PX = 8;
+
+// 결과 팝업이 링크 옆에 뜬 직후, 사용자가 링크에서 팝업으로 이동할 시간을 짧게 허용합니다.
+// 이 시간은 일반적인 닫힘 유예가 아니라, 초기 진입 안정화 전용입니다.
+const POPUP_ENTRY_GRACE_MS = 900;
+
+// 팝업이 등장하거나 compact → summary/detail로 바뀌는 짧은 순간에는
+// 브라우저 좌표/rect가 흔들려 mouseleave가 잘못 들어올 수 있으므로 닫힘 판단을 0.5초 늦춥니다.
+const POPUP_TRANSITION_GUARD_MS = 500;
+
+// 간단 팝업이 떠 있는 상태에서 링크 밖으로 나갔을 때,
+// 링크 → 팝업 이동 또는 다시 링크로 돌아오는 짧은 동작을 허용합니다.
+const COMPACT_POPUP_LINK_EXIT_GRACE_MS = 300;
+
+// API 한도 초과, API Key 미등록처럼 같은 원인으로 반복되는 오류는
+// 최초 1회만 팝업으로 보여주고, 이후에는 action popup 상태창에만 남깁니다.
+const PERSISTENT_ERROR_POPUP_HISTORY_KEY = "intonePersistentErrorPopupHistory";
+
+// 옵션 페이지에서 선택하는 팝업 크기 배율입니다. 100은 현재 90% 크기를 의미합니다.
+const POPUP_SCALE_STORAGE_KEY = "intonePopupScalePercent";
+const DEFAULT_POPUP_SCALE_PERCENT = 100;
 
 
 // ─────────────────────────────────────────────
@@ -54,6 +79,9 @@ const POPUP_VIEWPORT_PADDING_PX = 8;
 
 // setTimeout으로 만든 타이머의 ID. clearTimeout(hoverTimer)로 취소할 때 필요
 let hoverTimer = null;
+let popupDisplayTimer = null;
+let activeLinkHoverStartedAt = 0;
+let activeLinkPopupAllowedAt = 0;
 
 // 현재 마우스가 올라가 있는 <a> 링크 요소
 let activeLink = null;
@@ -76,6 +104,7 @@ let popupGraceCloseTimer = null;
 let popupDeferredCloseTimer = null;
 let popupHideAnimationTimer = null;
 let popupRepositionTimer = null;
+let popupAppearAnimationTimer = null;
 let lastPopupPosition = null;
 let lastPointerClientX = null;
 let lastPointerClientY = null;
@@ -87,10 +116,16 @@ let popupState = "hidden";
 let popupHadPointerEntry = false;
 let popupPreDetailPosition = null;
 let popupCompactHomePosition = null;
+let intonePopupScalePercent = DEFAULT_POPUP_SCALE_PERCENT;
 
 // 현재 표시 중인 팝업이 사라지기 전까지는 이 URL만 활성 링크로 인정합니다.
 // 다른 링크 hover가 기존 분석을 덮어쓰거나 새 팝업을 띄우는 것을 막기 위한 잠금값입니다.
 let lockedAnalysisUrl = "";
+
+// 팝업 잠금 때문에 바로 분석을 시작하지 못한 링크를 임시로 기억합니다.
+// 팝업이 완전히 사라진 뒤에도 커서가 이 링크 위에 있으면 그때부터 hover 타이머를 시작합니다.
+let pendingLockedLink = null;
+let pendingLockedPoint = null;
 
 
 // 팝업이 현재 어느 좌표에 표시되고 있는지 기억해두는 값 {x, y}
@@ -102,6 +137,11 @@ let popupOpenPoint = null;
 // 결과 팝업에서 처음에는 상단 요약 바만 보이고,
 // 마우스가 팝업 안으로 들어왔을 때 기사 요약 카드를 펼치기 위한 상태
 let summaryRevealCloseTimer = null;
+let popupEntryGraceTimer = null;
+let popupEntryGraceUntil = 0;
+let popupTransitionGuardTimer = null;
+let popupTransitionGuardUntil = 0;
+let summaryRevealAfterTransitionTimer = null;
 
 
 // ─────────────────────────────────────────────
@@ -118,10 +158,21 @@ let summaryRevealCloseTimer = null;
 document.addEventListener("mouseover",  handleMouseOver, true);  // 마우스가 요소 위로 올라갈 때
 document.addEventListener("mouseout",   handleMouseOut,  true);  // 마우스가 요소에서 벗어날 때
 document.addEventListener("mousemove",  handleMouseMove, true);  // 마우스가 움직일 때
+document.addEventListener("click",      handleDocumentClick, true); // 링크 클릭/페이지 이동 전 팝업 상태 정리
 
 // 창 크기가 바뀌거나 스크롤될 때 팝업이 화면 밖으로 나가지 않도록 위치 재계산
 window.addEventListener("resize", keepPopupInViewport);
 window.addEventListener("scroll", handleViewportScroll, true);
+
+// 링크 클릭 뒤 기사 페이지로 이동했다가 뒤로 돌아왔을 때,
+// bfcache가 이전 DOM을 복원하면서 오래된 팝업이 그대로 남는 것을 방지합니다.
+window.addEventListener("pagehide", () => resetPopupStateImmediately({ sendIdle: true }), { capture: true });
+window.addEventListener("pageshow", () => resetPopupStateImmediately({ sendIdle: false }), { capture: true });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    resetPopupStateImmediately({ sendIdle: true });
+  }
+});
 
 /*
   chrome.runtime.onMessage: background.js가 보내는 메시지를 여기서 받습니다.
@@ -138,7 +189,11 @@ chrome.runtime.onMessage.addListener((message) => {
 
   if (status.stage === "analyzing" && isStatusForActiveLink(status) && getPopupOpenPoint()) {
     suppressPopupMouseOutUntil = Date.now() + 800;
-    showLoadingPopupAtAnchor(status.label || "AI 분석 중...");
+    const link = activeLink;
+    const requestId = currentRequestId;
+    schedulePopupDisplayWhenAllowed(link, requestId, () => {
+      showLoadingPopupAtAnchor(status.label || "AI 분석 중...");
+    });
     return;
   }
 
@@ -177,8 +232,10 @@ function handleMouseOver(event) {
   }
 
   if (shouldIgnoreLinkBecausePopupIsLocked(href)) {
-    // 현재 팝업이 완전히 사라지기 전까지는 다른 링크를 새로 인식하지 않습니다.
-    // 이렇게 해야 기존 기사 팝업이 다른 링크 hover 때문에 덮어써지지 않습니다.
+    // 팝업이 떠 있는 동안 다른 링크를 완전히 버리지 않고,
+    // 마지막으로 마우스가 올라간 링크를 기억만 해둡니다.
+    // 팝업이 닫힌 뒤에도 커서가 이 링크 위에 있으면 그때부터 1초 타이머를 시작합니다.
+    rememberPendingLockedLink(link, event);
     return;
   }
 
@@ -186,27 +243,17 @@ function handleMouseOver(event) {
     // 같은 기사 링크 위로 다시 올라온 경우에는 기존 팝업을 유지하고
     // 새 hover 타이머/API 요청을 만들지 않습니다.
     activeLink = link;
+    if (!activeLinkHoverStartedAt) {
+      activeLinkHoverStartedAt = Date.now();
+      activeLinkPopupAllowedAt = activeLinkHoverStartedAt + POPUP_DISPLAY_DELAY_MS;
+    }
     lastMouseEvent = event;
     popupOpenPoint = popupOpenPoint || { x: event.clientX, y: event.clientY };
     cancelPendingPopupClose();
     return;
   }
 
-  activeLink      = link;  // 현재 올라가 있는 링크를 기억
-  lastMouseEvent  = event; // 마우스 위치를 팝업 표시에 사용
-  popupOpenPoint  = { x: event.clientX, y: event.clientY };
-  analysisStartedForActiveLink = false;
-  clearHoverTimer();       // 이전 타이머가 있으면 먼저 취소 (다른 링크로 빠르게 이동 시)
-
-  // 링크 감지 상태를 즉시 background/action popup에 알려서
-  // 실제 분석 대기 중에도 사용자가 "인식됨"을 확인할 수 있게 합니다.
-  sendStatus("link_detected", "링크 인식", href);
-
-  // 1초 후 analyzeHoveredLink 실행 예약
-  // window.setTimeout(함수, 시간): 지정한 시간(ms) 후에 함수를 실행
-  hoverTimer = window.setTimeout(() => {
-    handleInitialHoverDelay(link, event);
-  }, HOVER_DELAY_MS);
+  beginHoverTrackingForLink(link, event.clientX, event.clientY);
 }
 
 /*
@@ -229,6 +276,40 @@ function handleMouseOut(event) {
     return;
   }
 
+  // 팝업이 아직 화면에 표시되기 전이라면, 링크를 벗어난 순간
+  // 대기 중인 표시 타이머와 분석 응답 표시를 모두 무효화합니다.
+  if (!popup || popup.hidden) {
+    clearHoverTimer();
+    cancelPendingPopupDisplay();
+    activeLink = null;
+    popupOpenPoint = null;
+    activeLinkHoverStartedAt = 0;
+    activeLinkPopupAllowedAt = 0;
+    analysisStartedForActiveLink = false;
+    currentRequestId += 1;
+    clearAnalysisLock();
+    sendStatus("idle", "대기 중", "");
+    return;
+  }
+
+  if (popup && !popup.hidden && !popupHadPointerEntry && isPopupEntryGraceActive()) {
+    // 결과 팝업이 막 뜬 직후 link → popup 이동 중에 발생하는 mouseout은 바로 닫지 않습니다.
+    // 다만 실제로 링크와 팝업 밖에 머문 상태라면 grace가 끝난 뒤 한 번만 닫힘 검사를 합니다.
+    cancelPendingPopupClose();
+    const remaining = Math.max(0, popupEntryGraceUntil - Date.now() + 30);
+    popupDeferredCloseTimer = window.setTimeout(() => {
+      if (!popupHadPointerEntry) {
+        closePopupImmediatelyIfPointerOutside();
+      }
+    }, remaining);
+    return;
+  }
+
+  if (isCompactResultPopupVisible()) {
+    schedulePopupCloseFromPointerExit(COMPACT_POPUP_LINK_EXIT_GRACE_MS);
+    return;
+  }
+
   requestCloseCheckAfterPointerTransition();
 }
 
@@ -240,10 +321,31 @@ function handleMouseOut(event) {
 function handleMouseMove(event) {
   rememberPointerFromEvent(event);
 
+  if (pendingLockedLink && !isPointInsideElementRect(pendingLockedLink, event.clientX, event.clientY, 0)) {
+    clearPendingLockedLink();
+  }
+
   if (popup && !popup.hidden && isPointInsideElementRect(popup, event.clientX, event.clientY, 0)) {
     // 팝업 내부 이동은 상태를 바꾸지 않습니다. 닫힘 예약만 취소합니다.
     cancelPendingPopupClose();
   }
+}
+
+function handleDocumentClick(event) {
+  const clickedLink = event.target?.closest?.("a[href]");
+  if (!clickedLink || !/^https?:\/\//i.test(clickedLink.href || "")) {
+    return;
+  }
+
+  // 팝업 내부 버튼/링크 클릭은 팝업 자체 UI 조작일 수 있으므로 여기서 강제 종료하지 않습니다.
+  if (popup && popup.contains(event.target)) {
+    return;
+  }
+
+  // 기사 링크를 클릭해 페이지를 이동하면 mouseout이 발생하지 않거나,
+  // 뒤로가기로 돌아왔을 때 bfcache가 기존 팝업 DOM을 그대로 복원할 수 있습니다.
+  // 클릭 순간에 모든 팝업/락/타이머를 즉시 정리해서 오래된 팝업이 남지 않게 합니다.
+  resetPopupStateImmediately({ sendIdle: true });
 }
 
 /*
@@ -257,6 +359,209 @@ function clearHoverTimer() {
   }
 }
 
+function cancelPendingPopupDisplay() {
+  if (popupDisplayTimer) {
+    window.clearTimeout(popupDisplayTimer);
+    popupDisplayTimer = null;
+  }
+}
+
+function cancelPopupEntryGrace() {
+  window.clearTimeout(popupEntryGraceTimer);
+  popupEntryGraceTimer = null;
+  popupEntryGraceUntil = 0;
+}
+
+function isPopupEntryGraceActive() {
+  return Date.now() < popupEntryGraceUntil;
+}
+
+function cancelPopupTransitionGuard() {
+  window.clearTimeout(popupTransitionGuardTimer);
+  popupTransitionGuardTimer = null;
+  popupTransitionGuardUntil = 0;
+}
+
+function isPopupTransitionGuardActive() {
+  return Date.now() < popupTransitionGuardUntil;
+}
+
+function armPopupTransitionGuard(duration = POPUP_TRANSITION_GUARD_MS) {
+  window.clearTimeout(popupTransitionGuardTimer);
+  popupTransitionGuardUntil = Date.now() + duration;
+  popupTransitionGuardTimer = window.setTimeout(() => {
+    popupTransitionGuardTimer = null;
+    popupTransitionGuardUntil = 0;
+  }, duration);
+}
+
+function getPopupTransitionGuardRemaining(extra = 30) {
+  return Math.max(0, popupTransitionGuardUntil - Date.now() + extra);
+}
+
+function cancelScheduledSummaryReveal() {
+  window.clearTimeout(summaryRevealAfterTransitionTimer);
+  summaryRevealAfterTransitionTimer = null;
+}
+
+function scheduleSummaryRevealAfterTransition() {
+  cancelScheduledSummaryReveal();
+  const remaining = isPopupTransitionGuardActive()
+    ? getPopupTransitionGuardRemaining(20)
+    : 0;
+  summaryRevealAfterTransitionTimer = window.setTimeout(() => {
+    summaryRevealAfterTransitionTimer = null;
+    const x = lastPointerClientX ?? lastMouseEvent?.clientX;
+    const y = lastPointerClientY ?? lastMouseEvent?.clientY;
+    if (!popup || popup.hidden || popupState === "closing" || typeof x !== "number" || typeof y !== "number") {
+      return;
+    }
+    if (!isPointInsideElementRect(popup, x, y, 0)) {
+      return;
+    }
+    pointerInsidePopup = true;
+    popupHadPointerEntry = true;
+    lastPointerInsidePopupAt = Date.now();
+    cancelPopupEntryGrace();
+    cancelPendingPopupClose();
+    if (isSummaryRevealEnabled()) {
+      revealSummaryPanel();
+    }
+  }, remaining);
+}
+
+function armPopupEntryGrace() {
+  window.clearTimeout(popupEntryGraceTimer);
+  popupEntryGraceUntil = Date.now() + POPUP_ENTRY_GRACE_MS;
+  popupEntryGraceTimer = window.setTimeout(() => {
+    // 결과 팝업이 막 뜬 직후에는 브라우저가 link mouseout / popup mouseleave를
+    // 순서가 엇갈리게 발생시키는 경우가 있습니다. 여기서 직접 닫지 않고,
+    // 실제 mouseout/mouseleave/mousemove에서 밖으로 나간 것이 확인될 때만 닫습니다.
+    popupEntryGraceTimer = null;
+    popupEntryGraceUntil = 0;
+  }, POPUP_ENTRY_GRACE_MS);
+}
+
+function revealSummaryIfPointerAlreadyInside() {
+  window.requestAnimationFrame(() => {
+    const x = lastPointerClientX ?? lastMouseEvent?.clientX;
+    const y = lastPointerClientY ?? lastMouseEvent?.clientY;
+    if (!popup || popup.hidden || typeof x !== "number" || typeof y !== "number") {
+      return;
+    }
+    if (!isPointInsideElementRect(popup, x, y, 0)) {
+      return;
+    }
+
+    // 캐시 결과처럼 결과가 즉시 뜨는 경우, 팝업 생성 위치가 커서와 겹치면
+    // compact 팝업을 보기도 전에 바로 요약 카드가 펼쳐질 수 있습니다.
+    // 그래서 등장 후 0.5초 동안은 compact 상태를 먼저 유지하고,
+    // 그 뒤에도 커서가 팝업 안에 있을 때만 요약을 펼칩니다.
+    scheduleSummaryRevealAfterTransition();
+  });
+}
+
+function beginHoverTrackingForLink(link, clientX, clientY) {
+  if (!link || !document.documentElement.contains(link)) {
+    return;
+  }
+
+  const href = link.href;
+  if (!href || !/^https?:\/\//i.test(href)) {
+    return;
+  }
+
+  activeLink = link;
+  activeLinkHoverStartedAt = Date.now();
+  activeLinkPopupAllowedAt = activeLinkHoverStartedAt + POPUP_DISPLAY_DELAY_MS;
+  lastMouseEvent = { clientX, clientY };
+  popupOpenPoint = { x: clientX, y: clientY };
+  analysisStartedForActiveLink = false;
+  clearHoverTimer();
+  cancelPendingPopupDisplay();
+
+  sendStatus("link_detected", "링크 인식", href);
+
+  hoverTimer = window.setTimeout(() => {
+    handleInitialHoverDelay(link, { clientX, clientY });
+  }, HOVER_DELAY_MS);
+}
+
+function rememberPendingLockedLink(link, event) {
+  if (!link || !document.documentElement.contains(link)) {
+    clearPendingLockedLink();
+    return;
+  }
+
+  pendingLockedLink = link;
+  pendingLockedPoint = {
+    x: event?.clientX ?? lastPointerClientX ?? 0,
+    y: event?.clientY ?? lastPointerClientY ?? 0
+  };
+}
+
+function clearPendingLockedLink() {
+  pendingLockedLink = null;
+  pendingLockedPoint = null;
+}
+
+function startPendingLockedLinkIfStillHovered() {
+  if (!pendingLockedLink || !document.documentElement.contains(pendingLockedLink)) {
+    clearPendingLockedLink();
+    return false;
+  }
+
+  const x = lastPointerClientX ?? pendingLockedPoint?.x;
+  const y = lastPointerClientY ?? pendingLockedPoint?.y;
+  if (!isPointInsideElementRect(pendingLockedLink, x, y, 0)) {
+    clearPendingLockedLink();
+    return false;
+  }
+
+  const link = pendingLockedLink;
+  const point = { x, y };
+  clearPendingLockedLink();
+  beginHoverTrackingForLink(link, point.x, point.y);
+  return true;
+}
+
+function getRemainingPopupDisplayDelay() {
+  return Math.max(0, activeLinkPopupAllowedAt - Date.now());
+}
+
+function canDisplayPopupForLink(link, requestId) {
+  const isSameActiveLink = Boolean(link && activeLink === link);
+  const isSameLockedUrl = Boolean(link && isAnalysisLockActive() && isUrlLockedToCurrentAnalysis(link.href));
+
+  return Boolean(
+    link &&
+    (isSameActiveLink || isSameLockedUrl) &&
+    requestId === currentRequestId &&
+    analysisStartedForActiveLink &&
+    Date.now() >= activeLinkPopupAllowedAt
+  );
+}
+
+function schedulePopupDisplayWhenAllowed(link, requestId, callback) {
+  cancelPendingPopupDisplay();
+
+  const run = () => {
+    popupDisplayTimer = null;
+    if (!canDisplayPopupForLink(link, requestId)) {
+      return;
+    }
+    callback();
+  };
+
+  const remaining = getRemainingPopupDisplayDelay();
+  if (remaining <= 0) {
+    run();
+    return;
+  }
+
+  popupDisplayTimer = window.setTimeout(run, remaining);
+}
+
 function handleInitialHoverDelay(link, event) {
   hoverTimer = null;
   if (activeLink !== link) {
@@ -268,23 +573,67 @@ function handleInitialHoverDelay(link, event) {
   popupOpenPoint = { x: event.clientX, y: event.clientY };
   sendStatus("hover_confirmed", "1초 머무름 확인", link.href);
 
-  checkKnownNewsLink(link.href, (isKnownNews) => {
+  // 언론사 리스트 대조나 뉴스 판별 API 요청보다 먼저 캐시를 확인합니다.
+  // 이미 분석한 URL이면 저장된 결과를 즉시 사용하고, API 요청을 새로 만들지 않습니다.
+  checkAnalysisCache(link.href, (cachedResult) => {
     if (activeLink !== link) {
       return;
     }
 
-    if (isKnownNews) {
-      // 등록된 대표 언론사/학습된 뉴스 사이트는 기사 여부 판별을 건너뛰고
-      // 바로 분석 단계로 들어가므로 로딩 팝업을 즉시 보여줍니다.
-      showLoadingPopup(event.clientX, event.clientY, "뉴스 기사 분석 중...");
-      analyzeHoveredLink(link, event, { skipArticleCheck: true, suppressInitialPopup: false });
+    if (cachedResult) {
+      if (cachedResult.is_article) {
+        const requestId = currentRequestId;
+        schedulePopupDisplayWhenAllowed(link, requestId, () => {
+          showResultPopup(cachedResult);
+        });
+      } else {
+        hidePopup();
+        clearAnalysisLock();
+        analysisStartedForActiveLink = false;
+      }
       return;
     }
 
-    // 등록되지 않은 사이트는 먼저 background에서 조용히 기사 여부만 판별합니다.
-    // 뉴스 기사가 아니면 팝업을 전혀 띄우지 않고 지나갑니다.
-    analyzeHoveredLink(link, event, { suppressInitialPopup: true });
+    checkKnownNewsLink(link.href, (isKnownNews) => {
+      if (activeLink !== link) {
+        return;
+      }
+
+      if (isKnownNews) {
+        // 등록된 대표 언론사/학습된 뉴스 사이트는 기사 여부 판별을 건너뛰고
+        // 1초 시점에 바로 분석은 시작하되, 화면 팝업은 2초 이상 머문 경우에만 표시합니다.
+        analyzeHoveredLink(link, event, { skipArticleCheck: true, suppressInitialPopup: false });
+        return;
+      }
+
+      // 등록되지 않은 사이트는 1초 확인 직후 바로 API에 요청하지 않습니다.
+      // 사용자가 같은 링크 위에 총 4초(기본 1초 + 추가 3초) 머물렀을 때만
+      // background에서 조용히 뉴스 기사 여부 판별을 시작합니다.
+      hoverTimer = window.setTimeout(() => {
+        hoverTimer = null;
+        if (activeLink !== link) {
+          return;
+        }
+        analyzeHoveredLink(link, event, { suppressInitialPopup: true });
+      }, Math.max(0, UNKNOWN_NEWS_DELAY_MS - HOVER_DELAY_MS));
+    });
   });
+}
+
+function checkAnalysisCache(url, callback) {
+  chrome.runtime.sendMessage(
+    {
+      type: "CHECK_ANALYSIS_CACHE",
+      payload: { url }
+    },
+    (response) => {
+      if (chrome.runtime.lastError || !response?.ok) {
+        callback(null);
+        return;
+      }
+      callback(response.cached || null);
+    }
+  );
 }
 
 function checkKnownNewsLink(url, callback) {
@@ -346,7 +695,9 @@ function analyzeHoveredLink(link, event, options = {}) {
   analysisStartedForActiveLink = true;
   popupOpenPoint = popupOpenPoint || { x: event.clientX, y: event.clientY };
   if (!options.suppressInitialPopup && (!popup || popup.hidden)) {
-    showLoadingPopup(event.clientX, event.clientY, "분석 준비 중...");
+    schedulePopupDisplayWhenAllowed(link, requestId, () => {
+      showLoadingPopup(event.clientX, event.clientY, "분석 준비 중...");
+    });
   }
   sendStatus("hover_confirmed", "1초 머무름 확인", href);
 
@@ -375,20 +726,24 @@ function analyzeHoveredLink(link, event, options = {}) {
     (response) => {
       // 응답이 왔을 때 이미 다른 링크로 이동했거나 마우스가 벗어났으면 무시
       // requestId가 currentRequestId와 다르면 이 응답은 오래된 것임
-      if (requestId !== currentRequestId || activeLink !== link) {
+      if (requestId !== currentRequestId || !(activeLink === link || isUrlLockedToCurrentAnalysis(link.href))) {
         return;
       }
 
       // chrome.runtime.lastError: 메시지 전송 자체가 실패했을 때 세팅됨
       // 예) background.js가 아직 실행되지 않았거나, 확장 프로그램이 업데이트된 경우
       if (chrome.runtime.lastError) {
-        showErrorPopup("확장 프로그램과 통신하지 못했습니다. 페이지를 새로고침한 뒤 다시 시도하세요.");
+        schedulePopupDisplayWhenAllowed(link, requestId, () => {
+          showErrorPopupOnceForPersistentError("확장 프로그램과 통신하지 못했습니다. 페이지를 새로고침한 뒤 다시 시도하세요.");
+        });
         return;
       }
 
       // background.js가 { ok: false, error: "..." } 로 응답한 경우
       if (!response || !response.ok) {
-        showErrorPopup(response?.error || "AI 분석 중 문제가 발생했습니다.");
+        schedulePopupDisplayWhenAllowed(link, requestId, () => {
+          showErrorPopupOnceForPersistentError(response?.error || "AI 분석 중 문제가 발생했습니다.");
+        });
         return;
       }
 
@@ -402,7 +757,9 @@ function analyzeHoveredLink(link, event, options = {}) {
       }
 
       // 성공! response.data에 분석 결과 객체가 담겨 있음
-      showResultPopup(response.data);
+      schedulePopupDisplayWhenAllowed(link, requestId, () => {
+        showResultPopup(response.data);
+      });
     }
   );
 }
@@ -510,9 +867,22 @@ function refreshPopupPointerState(clientX, clientY) {
     return true;
   }
 
+  if (!popupHadPointerEntry && isPopupEntryGraceActive()) {
+    return false;
+  }
+
   // 한 번이라도 팝업 안에 들어온 뒤에는, 팝업 밖 좌표가 감지되는 즉시 닫습니다.
   // mouseleave가 누락되는 브라우저/레이아웃 변화 상황까지 막기 위한 보조 안전장치입니다.
   if (popupHadPointerEntry && popupState !== "closing") {
+    // 요약/상세 전환이나 위치 보정 중에는 팝업 rect가 순간적으로 변해서
+    // 커서가 밖에 있는 것처럼 보일 수 있으므로 즉시 닫지 않습니다.
+    if (isPopupTransitionGuardActive()) {
+      schedulePopupCloseFromPointerExit(getPopupTransitionGuardRemaining());
+      return false;
+    }
+    if (isPopupLayoutChanging()) {
+      return false;
+    }
     closePopupFromPointerExit();
   }
 
@@ -572,6 +942,8 @@ function markPopupLayoutChanging(duration = POPUP_INTERACTION_GRACE_MS) {
   cancelPendingPopupClose();
   popupLayoutMutationUntil = Date.now() + duration;
   suppressPopupMouseOutUntil = 0;
+  // 레이아웃 전환이 시작되는 순간에도 최소 0.5초는 닫힘 판정을 유예합니다.
+  armPopupTransitionGuard(Math.max(POPUP_TRANSITION_GUARD_MS, Math.min(duration, POPUP_INTERACTION_GRACE_MS)));
 }
 
 function isPopupLayoutChanging() {
@@ -619,6 +991,22 @@ function closePopupImmediatelyIfPointerOutside() {
       return;
     }
 
+    if (isPopupTransitionGuardActive()) {
+      popupDeferredCloseTimer = window.setTimeout(closePopupImmediatelyIfPointerOutside, getPopupTransitionGuardRemaining());
+      return;
+    }
+
+    if (!popupHadPointerEntry && isPopupEntryGraceActive()) {
+      const remaining = Math.max(0, popupEntryGraceUntil - Date.now() + 30);
+      popupDeferredCloseTimer = window.setTimeout(closePopupImmediatelyIfPointerOutside, remaining);
+      return;
+    }
+
+    if (isPopupLayoutChanging()) {
+      popupDeferredCloseTimer = window.setTimeout(closePopupImmediatelyIfPointerOutside, 120);
+      return;
+    }
+
     closePopupFromPointerExit();
   });
 }
@@ -659,6 +1047,9 @@ function closePopupFromPointerExit() {
   const shouldSendIdle = analysisStartedForActiveLink;
   clearHoverTimer();
   cancelPendingPopupClose();
+  cancelPendingPopupDisplay();
+  activeLinkHoverStartedAt = 0;
+  activeLinkPopupAllowedAt = 0;
   pointerInsidePopup = false;
   activeLink = null;
   analysisStartedForActiveLink = false;
@@ -682,6 +1073,16 @@ function showLoadingPopupAtAnchor(message) {
 }
 
 
+function isCompactResultPopupVisible() {
+  return Boolean(
+    popup &&
+    !popup.hidden &&
+    popup.classList.contains("ai-news-popup--result") &&
+    popup.classList.contains("ai-news-popup--summary-collapsed") &&
+    popupState !== "closing"
+  );
+}
+
 function isSummaryRevealEnabled() {
   return Boolean(
     popup &&
@@ -697,10 +1098,6 @@ function getSummaryRevealDirection() {
 }
 
 function isPointerInSummaryRevealCorridor() {
-  return false;
-}
-
-function shouldHoldPopupForSummaryReveal() {
   return false;
 }
 
@@ -727,11 +1124,12 @@ function revealSummaryPanel() {
     scheduleViewportClamp(360);
     popup?.classList.remove("ai-news-popup--anchoring-summary");
 
-    if (isPointerInsideActiveAreas()) {
-      cancelPendingPopupClose();
-    } else {
-      closePopupFromPointerExit();
-    }
+    // 요약 확장은 사용자가 팝업에 진입했을 때만 실행됩니다.
+    // 카드가 펼쳐지며 위치가 순간 보정되는 동안 커서가 새 rect 밖으로 보이는 경우가 있어도
+    // 여기서 즉시 닫지 않고 mouseleave가 실제 발생했을 때만 닫습니다.
+    popupHadPointerEntry = true;
+    pointerInsidePopup = true;
+    cancelPendingPopupClose();
   });
 }
 
@@ -818,6 +1216,8 @@ function ensurePopup() {
   // 팝업 내부 클릭 이벤트 (버튼 동작 처리)
   popup.addEventListener("click", handlePopupClick);
   // 결과 팝업 안으로 마우스가 들어오면 기사 요약 카드를 펼침
+  popup.addEventListener("mouseenter", handlePopupMouseEnter);
+  popup.addEventListener("pointerenter", handlePopupMouseEnter);
   popup.addEventListener("mouseover", handlePopupMouseOver);
   // 팝업 전체 바깥으로 마우스가 나갈 때만 닫힘 판정을 실행합니다.
   // mouseout은 내부 요소 이동에도 계속 발생하므로 사용하지 않습니다.
@@ -835,12 +1235,40 @@ function ensurePopup() {
   숨겨져 있던 기사 요약 카드를 자연스럽게 펼칩니다.
   이제 화살표 버튼이나 방향 이동 조건은 사용하지 않습니다.
 */
+function handlePopupMouseEnter(event) {
+  if (!popup || popup.hidden) {
+    return;
+  }
+  rememberPointerFromEvent(event);
+  pointerInsidePopup = true;
+  popupHadPointerEntry = true;
+  lastPointerInsidePopupAt = Date.now();
+  cancelPopupEntryGrace();
+  cancelPendingPopupClose();
+  if (popup.classList.contains("ai-news-popup--closing")) {
+    window.clearTimeout(popupHideAnimationTimer);
+    popup.classList.remove("ai-news-popup--closing");
+    setPopupState(inferPopupStateFromClasses());
+  }
+  if (isSummaryRevealEnabled()) {
+    if (isPopupTransitionGuardActive()) {
+      scheduleSummaryRevealAfterTransition();
+    } else {
+      revealSummaryPanel();
+    }
+  }
+}
+
 function handlePopupMouseOver(event) {
   if (!popup || popup.hidden || !popup.contains(event.target)) {
     return;
   }
 
   rememberPointerFromEvent(event);
+  pointerInsidePopup = true;
+  popupHadPointerEntry = true;
+  lastPointerInsidePopupAt = Date.now();
+  cancelPopupEntryGrace();
   cancelPendingPopupClose();
 
   if (popup.classList.contains("ai-news-popup--closing")) {
@@ -850,7 +1278,11 @@ function handlePopupMouseOver(event) {
   }
 
   if (isSummaryRevealEnabled()) {
-    revealSummaryPanel();
+    if (isPopupTransitionGuardActive()) {
+      scheduleSummaryRevealAfterTransition();
+    } else {
+      revealSummaryPanel();
+    }
   }
 }
 
@@ -858,9 +1290,26 @@ function handlePopupMouseLeave(event) {
   rememberPointerFromEvent(event);
   pointerInsidePopup = false;
 
-  // 팝업 전체 밖으로 나가는 순간 유예 없이 닫힘 애니메이션을 시작합니다.
-  // 이전 버전의 layout/grace 유지 로직 때문에 밖으로 나가도 남아 있던 문제를 제거합니다.
-  closePopupFromPointerExit();
+  if (event?.relatedTarget && popup?.contains(event.relatedTarget)) {
+    return;
+  }
+
+  // 팝업이 등장/확장/위치보정되는 0.5초 동안은 mouseleave가 오더라도
+  // 즉시 닫지 않고 전환이 끝난 뒤 실제 좌표를 다시 확인합니다.
+  if (isPopupTransitionGuardActive()) {
+    schedulePopupCloseFromPointerExit(getPopupTransitionGuardRemaining());
+    return;
+  }
+
+  // 팝업이 펼쳐지거나 화면 안으로 보정되는 중에는 브라우저가 mouseleave를
+  // 잘못 발생시키는 경우가 있어, 보정이 끝난 뒤 실제 좌표를 다시 확인합니다.
+  if (isPopupLayoutChanging()) {
+    schedulePopupCloseFromPointerExit(140);
+    return;
+  }
+
+  cancelPopupEntryGrace();
+  closePopupImmediatelyIfPointerOutside();
 }
 
 /*
@@ -895,6 +1344,28 @@ function handlePopupClick(event) {
   <details open> 이면 세부 항목이 펼쳐진 상태, open이 없으면 접힌 상태입니다.
   내용이 바뀌면 팝업 높이가 달라지므로 keepPopupInViewport()도 호출합니다.
 */
+
+function preserveButtonPosition(previousButtonRect) {
+  if (!popup || !previousButtonRect) {
+    return;
+  }
+
+  const currentButton = popup.querySelector("[data-ai-news-action='toggle-details']");
+  if (!currentButton) {
+    return;
+  }
+
+  const currentRect = currentButton.getBoundingClientRect();
+  const currentPosition = getCurrentPopupPosition();
+  if (!currentPosition) {
+    return;
+  }
+
+  const nextLeft = currentPosition.left + (previousButtonRect.left - currentRect.left);
+  const nextTop = currentPosition.top + (previousButtonRect.top - currentRect.top);
+  restorePopupPosition({ left: nextLeft, top: nextTop });
+}
+
 function toggleDetails(button) {
   const details = popup?.querySelector(".ai-news-popup__details");
   if (!details || !popup || popupState === "closing") {
@@ -904,6 +1375,7 @@ function toggleDetails(button) {
   // 상세보기/간략히보기는 오직 이 버튼 클릭으로만 바뀝니다.
   // 마우스 이동, 스크롤, 위치 보정에서는 이 상태를 건드리지 않습니다.
   const compactBefore = getCompactBarRect();
+  const buttonBefore = button ? button.getBoundingClientRect() : null;
   const willOpen = !details.classList.contains("is-open");
 
   if (willOpen) {
@@ -926,9 +1398,9 @@ function toggleDetails(button) {
       preserveCompactBarPosition(compactBefore);
       scheduleViewportClamp(360);
     } else {
-      // 간략히 보기로 접을 때는 상세보기 때문에 밀렸던 위치가 아니라,
-      // 상세보기 직전의 원래 위치로 돌아갑니다.
-      restorePopupPosition(popupPreDetailPosition || popupCompactHomePosition);
+      // 간략히 보기로 접을 때는 클릭한 버튼의 화면 위치를 기준으로 팝업을 고정합니다.
+      // 이렇게 해야 버튼이 있던 팝업을 중심으로 상세 영역만 접히고, 팝업이 이전 위치로 튀지 않습니다.
+      preserveButtonPosition(buttonBefore);
       scheduleViewportClamp(220);
     }
 
@@ -1002,17 +1474,10 @@ function findScrollablePopupParent(startNode) {
 function showLoadingPopup(x, y, message = "AI 분석 중...") {
   const popupElement = ensurePopup();
   setPopupState("loading");
-  popupElement.className = "ai-news-popup ai-news-popup--loading ai-news-popup--separated";
+  popupElement.className = "ai-news-popup ai-news-popup--loading ai-news-popup--separated ai-news-popup--summary-collapsed";
   popupElement.innerHTML = `
-    <section class="news-ai-card">
-      ${renderBrandHeader()}
-      <div class="news-ai-loading">
-        <div class="news-ai-loading__ring"></div>
-        <div>
-          <p class="news-ai-loading__title">${escapeHtml(message)}</p>
-          <p class="news-ai-loading__text">뉴스 기사로 확인된 링크만 분석 팝업을 표시합니다.</p>
-        </div>
-      </div>
+    <section class="inton-mini-shell inton-loading-shell inton-loading-shell--compact">
+      ${renderLoadingTopBar(message)}
     </section>
   `;
   showPopupElement(popupElement);
@@ -1025,11 +1490,126 @@ function showLoadingPopup(x, y, message = "AI 분석 중...") {
   background.js에서 STATUS_BROADCAST 메시지가 올 때마다 호출됩니다.
 */
 function updateLoadingStatus(message) {
-  const status = popup?.querySelector(".news-ai-loading__title");
+  const status = popup?.querySelector(".inton-loading-title");
   // 현재 로딩 상태일 때만 텍스트 변경 (결과가 표시되고 있을 때 덮어쓰지 않도록)
   if (status && popup.classList.contains("ai-news-popup--loading")) {
-    status.textContent = message;
+    status.textContent = getCompactLoadingLabel(message);
+    status.closest(".inton-loading-mini")?.setAttribute("title", message);
+    status.closest(".inton-loading-mini")?.setAttribute("aria-label", message);
   }
+}
+
+/*
+  showErrorPopupOnceForPersistentError:
+  API Key 미등록, API 한도 초과, 인증 실패처럼 같은 원인이 계속 반복될 수 있는 오류는
+  최초 1회만 화면 팝업으로 표시합니다. 이후 같은 종류의 오류는 background.js가 저장한
+  상태 메시지를 action popup에서만 확인할 수 있게 하고, 화면 팝업은 띄우지 않습니다.
+*/
+function showErrorPopupOnceForPersistentError(message) {
+  const errorKey = getPersistentErrorKey(message);
+
+  if (!errorKey) {
+    showErrorPopup(message);
+    return;
+  }
+
+  wasPersistentErrorPopupShown(errorKey).then((alreadyShown) => {
+    if (alreadyShown) {
+      // background.js는 이미 currentAnalysisStatus에 오류 내용을 저장했습니다.
+      // 반복 오류는 웹페이지 위에 계속 팝업을 띄우지 않고 조용히 닫습니다.
+      hidePopup();
+      clearAnalysisLock();
+      analysisStartedForActiveLink = false;
+      return;
+    }
+
+    markPersistentErrorPopupShown(errorKey).finally(() => {
+      showErrorPopup(message);
+    });
+  }).catch(() => {
+    // 저장소 접근에 실패하면 사용자에게 최소 한 번은 오류를 보여줍니다.
+    showErrorPopup(message);
+  });
+}
+
+function getPersistentErrorKey(message) {
+  const text = String(message || "").toLowerCase();
+
+  if (
+    text.includes("api key") ||
+    text.includes("api키") ||
+    text.includes("api 키") ||
+    text.includes("options에서 설정") ||
+    text.includes("사용할 수 있는 ai api key")
+  ) {
+    return "api_key_missing_or_unavailable";
+  }
+
+  if (
+    text.includes("429") ||
+    text.includes("rate limit") ||
+    text.includes("quota") ||
+    text.includes("limit") ||
+    text.includes("한도") ||
+    text.includes("too many requests")
+  ) {
+    return "api_quota_or_rate_limit";
+  }
+
+  if (
+    text.includes("401") ||
+    text.includes("403") ||
+    text.includes("unauthorized") ||
+    text.includes("forbidden") ||
+    text.includes("invalid api") ||
+    text.includes("인증") ||
+    text.includes("권한")
+  ) {
+    return "api_auth_or_permission";
+  }
+
+  if (
+    text.includes("api 요청 실패") ||
+    text.includes("500") ||
+    text.includes("502") ||
+    text.includes("503") ||
+    text.includes("504") ||
+    text.includes("server error")
+  ) {
+    return "api_provider_error";
+  }
+
+  return "";
+}
+
+function wasPersistentErrorPopupShown(errorKey) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([PERSISTENT_ERROR_POPUP_HISTORY_KEY], (items) => {
+      if (chrome.runtime.lastError) {
+        resolve(false);
+        return;
+      }
+
+      const history = items[PERSISTENT_ERROR_POPUP_HISTORY_KEY] || {};
+      resolve(Boolean(history && history[errorKey]));
+    });
+  });
+}
+
+function markPersistentErrorPopupShown(errorKey) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([PERSISTENT_ERROR_POPUP_HISTORY_KEY], (items) => {
+      const history = items[PERSISTENT_ERROR_POPUP_HISTORY_KEY] || {};
+      const nextHistory = {
+        ...history,
+        [errorKey]: Date.now()
+      };
+
+      chrome.storage.local.set({ [PERSISTENT_ERROR_POPUP_HISTORY_KEY]: nextHistory }, () => {
+        resolve();
+      });
+    });
+  });
 }
 
 /*
@@ -1073,6 +1653,7 @@ function showErrorPopup(message) {
 */
 function showResultPopup(result) {
   const popupElement = ensurePopup();
+  const wasLoadingPopup = popupElement.classList.contains("ai-news-popup--loading");
   setPopupState("compact");
 
   if (!result.is_article) {
@@ -1095,11 +1676,27 @@ function showResultPopup(result) {
         </section>
       </section>
     `;
-    showPopupElement(popupElement);
+  if (wasLoadingPopup) {
+    popupElement.classList.add("ai-news-popup--from-loading");
+    window.setTimeout(() => {
+      popupElement?.classList.remove("ai-news-popup--from-loading");
+    }, 320);
+  }
+
+    if (wasLoadingPopup) {
+    popupElement.classList.add("ai-news-popup--from-loading");
+    window.setTimeout(() => {
+      popupElement?.classList.remove("ai-news-popup--from-loading");
+    }, 320);
+  }
+
+  showPopupElement(popupElement);
     const point = getPopupOpenPoint();
     if (point) {
       positionPopup(point.x, point.y);
       rememberCompactHomePosition();
+      armPopupEntryGrace();
+      revealSummaryIfPointerAlreadyInside();
     }
     return;
   }
@@ -1173,6 +1770,8 @@ function showResultPopup(result) {
   if (point) {
     positionPopup(point.x, point.y);
     rememberCompactHomePosition();
+    armPopupEntryGrace();
+    revealSummaryIfPointerAlreadyInside();
   }
 }
 
@@ -1200,6 +1799,43 @@ function getClickbaitShortLabel(score) {
   if (normalized <= 40) return "낮음";
   if (normalized <= 60) return "중간";
   return "높음";
+}
+
+function getCompactLoadingLabel(message) {
+  const text = String(message || "");
+
+  if (/기사|판별|뉴스|확인된/.test(text)) {
+    return "기사 확인";
+  }
+
+  if (/분석|점수|신뢰|어그로|요약|AI/.test(text)) {
+    return "AI 분석";
+  }
+
+  if (/링크|URL|준비|캐시|패턴|리스트/.test(text)) {
+    return "준비 중";
+  }
+
+  return "분석 중";
+}
+
+function renderLoadingTopBar(message = "AI 분석 중...") {
+  const logoUrl = chrome.runtime.getURL("assets/logo.png");
+  const loadingLabel = getCompactLoadingLabel(message);
+  return `
+    <header class="inton-compact-bar inton-compact-bar--loading" aria-label="Intone 분석 진행 상태">
+      <div class="inton-logo-pill" aria-hidden="true">
+        <img src="${escapeHtml(logoUrl)}" alt="">
+      </div>
+      <div class="inton-status-pill inton-status-pill--loading">
+        <span class="inton-brand">Intone</span>
+        <span class="inton-loading-mini" title="${escapeHtml(message)}" aria-label="${escapeHtml(message)}">
+          <span class="inton-loading-mini__spinner" aria-hidden="true"></span>
+          <strong class="inton-loading-title">${escapeHtml(loadingLabel)}</strong>
+        </span>
+      </div>
+    </header>
+  `;
 }
 
 function renderCompactTopBar(credibilityLabel, clickbaitLabel) {
@@ -1375,19 +2011,82 @@ function renderBreakdown(title, breakdown = {}, rows) {
 }
 
 
+function normalizePopupScalePercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_POPUP_SCALE_PERCENT;
+  }
+  return Math.max(70, Math.min(130, Math.round(numeric)));
+}
+
+function applyPopupScaleToElement(popupElement = popup) {
+  if (!popupElement) {
+    return;
+  }
+
+  const normalized = normalizePopupScalePercent(intonePopupScalePercent);
+  popupElement.style.setProperty("--intone-user-scale", String(normalized / 100));
+  popupElement.dataset.intoneScale = String(normalized);
+}
+
+function loadPopupScalePreference() {
+  chrome.storage.local.get([POPUP_SCALE_STORAGE_KEY], (items) => {
+    intonePopupScalePercent = normalizePopupScalePercent(items[POPUP_SCALE_STORAGE_KEY]);
+    applyPopupScaleToElement();
+  });
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local" || !changes[POPUP_SCALE_STORAGE_KEY]) {
+    return;
+  }
+
+  intonePopupScalePercent = normalizePopupScalePercent(changes[POPUP_SCALE_STORAGE_KEY].newValue);
+  applyPopupScaleToElement();
+  keepPopupInViewport();
+});
+
+loadPopupScalePreference();
+
+
 function showPopupElement(popupElement) {
   const wasHiddenOrClosing = popupElement.hidden || popupElement.classList.contains("ai-news-popup--closing");
   window.clearTimeout(popupHideAnimationTimer);
   cancelPendingPopupClose();
   if (wasHiddenOrClosing) {
     lastPopupPosition = null;
+    cancelPopupEntryGrace();
+    cancelScheduledSummaryReveal();
+    armPopupTransitionGuard();
     popupHadPointerEntry = false;
     popupPreDetailPosition = null;
     popupCompactHomePosition = null;
   }
   popupElement.hidden = false;
   popupElement.classList.remove("ai-news-popup--closing", "ai-news-popup--safe-zone-active", "ai-news-popup--moving");
+  applyPopupScaleToElement(popupElement);
+  if (wasHiddenOrClosing) {
+    triggerPopupAppearAnimation(popupElement);
+  }
   updatePopupViewportLimits();
+}
+
+
+function triggerPopupAppearAnimation(popupElement) {
+  if (!popupElement) {
+    return;
+  }
+
+  popupElement.classList.remove("ai-news-popup--appearing");
+  // 강제 reflow로 이전 애니메이션 상태를 정리한 뒤, 최초 표시 때만 다시 실행합니다.
+  void popupElement.offsetWidth;
+  popupElement.classList.add("ai-news-popup--appearing");
+
+  window.clearTimeout(popupAppearAnimationTimer);
+  popupAppearAnimationTimer = window.setTimeout(() => {
+    popupAppearAnimationTimer = null;
+    popupElement?.classList.remove("ai-news-popup--appearing");
+  }, POPUP_APPEAR_ANIMATION_MS + 60);
 }
 
 
@@ -1399,6 +2098,17 @@ function updatePopupViewportLimits() {
   const padding = POPUP_VIEWPORT_PADDING_PX;
   const availableWidth = Math.max(1, window.innerWidth - padding * 2);
   const availableHeight = Math.max(1, window.innerHeight - padding * 2);
+
+  if (popup.classList.contains("ai-news-popup--separated")) {
+    popup.style.height = "auto";
+    popup.style.minHeight = "0";
+    popup.style.maxHeight = "none";
+    popup.style.overflow = "visible";
+    popup.style.setProperty("--inton-popup-max-height", `${availableHeight}px`);
+    popup.style.setProperty("--inton-detail-max-height", `${Math.max(170, availableHeight - 130)}px`);
+    popup.style.setProperty("--inton-summary-max-height", `${Math.max(110, Math.min(340, availableHeight - 100))}px`);
+    return;
+  }
 
   popup.style.maxWidth = `${availableWidth}px`;
   popup.style.maxHeight = `${availableHeight}px`;
@@ -1469,8 +2179,15 @@ function positionPopup(clientX, clientY) {
 
   const availableWidth = Math.max(1, window.innerWidth - viewportPadding * 2);
   const availableHeight = Math.max(1, window.innerHeight - viewportPadding * 2);
-  popupElement.style.maxWidth = `${availableWidth}px`;
-  popupElement.style.maxHeight = `${availableHeight}px`;
+  if (popupElement.classList.contains("ai-news-popup--separated")) {
+    popupElement.style.height = "auto";
+    popupElement.style.minHeight = "0";
+    popupElement.style.maxHeight = "none";
+    popupElement.style.overflow = "visible";
+  } else {
+    popupElement.style.maxWidth = `${availableWidth}px`;
+    popupElement.style.maxHeight = `${availableHeight}px`;
+  }
 
   const rect = popupElement.getBoundingClientRect();
   const width = Math.min(rect.width, availableWidth);
@@ -1597,6 +2314,64 @@ function keepPopupInViewport() {
   });
 }
 
+function resetPopupStateImmediately(options = {}) {
+  const { sendIdle = false } = options;
+
+  clearHoverTimer();
+  cancelPendingPopupDisplay();
+  cancelPendingPopupClose();
+  cancelPopupEntryGrace();
+  cancelScheduledSummaryReveal();
+  cancelPopupTransitionGuard();
+
+  window.clearTimeout(summaryRevealCloseTimer);
+  window.clearTimeout(popupHideAnimationTimer);
+  window.clearTimeout(popupRepositionTimer);
+
+  if (popupCloseCheckFrame) {
+    cancelAnimationFrame(popupCloseCheckFrame);
+    popupCloseCheckFrame = null;
+  }
+
+  if (popup) {
+    popup.hidden = true;
+    popup.classList.remove(
+      "ai-news-popup--closing",
+      "ai-news-popup--safe-zone-active",
+      "ai-news-popup--moving",
+      "ai-news-popup--appearing",
+      "ai-news-popup--summary-expanded",
+      "ai-news-popup--summary-collapsed",
+      "ai-news-popup--loading",
+      "ai-news-popup--error",
+      "ai-news-popup--result"
+    );
+    popup.removeAttribute("data-summary-direction");
+  }
+
+  activeLink = null;
+  activeLinkHoverStartedAt = 0;
+  activeLinkPopupAllowedAt = 0;
+  analysisStartedForActiveLink = false;
+  popupAnchor = null;
+  popupOpenPoint = null;
+  lastPopupPosition = null;
+  pointerInsidePopup = false;
+  popupHadPointerEntry = false;
+  popupPreDetailPosition = null;
+  popupCompactHomePosition = null;
+  popupLayoutMutationUntil = 0;
+  suppressPopupMouseOutUntil = 0;
+  currentRequestId += 1;
+  clearAnalysisLock();
+  clearPendingLockedLink();
+  setPopupState("hidden");
+
+  if (sendIdle) {
+    sendStatus("idle", "대기 중", "");
+  }
+}
+
 /*
   hidePopup: 팝업을 화면에서 숨깁니다.
   hidden = true 로 설정하면 display: none과 유사하게 보이지 않게 되고,
@@ -1605,6 +2380,10 @@ function keepPopupInViewport() {
 function hidePopup() {
   setPopupState("closing");
   window.clearTimeout(summaryRevealCloseTimer);
+  cancelPopupEntryGrace();
+  cancelScheduledSummaryReveal();
+  cancelPopupTransitionGuard();
+  cancelPendingPopupDisplay();
   window.clearTimeout(popupGraceCloseTimer);
   window.clearTimeout(popupDeferredCloseTimer);
   window.clearTimeout(popupHideAnimationTimer);
@@ -1615,7 +2394,7 @@ function hidePopup() {
   popupLayoutMutationUntil = 0;
 
   if (popup && !popup.hidden) {
-    popup.classList.remove("ai-news-popup--safe-zone-active", "ai-news-popup--moving");
+    popup.classList.remove("ai-news-popup--safe-zone-active", "ai-news-popup--moving", "ai-news-popup--appearing");
     popup.classList.add("ai-news-popup--closing");
     popupHideAnimationTimer = window.setTimeout(() => {
       if (!popup) {
@@ -1632,9 +2411,16 @@ function hidePopup() {
       popupHadPointerEntry = false;
       popupPreDetailPosition = null;
       popupCompactHomePosition = null;
+      activeLinkHoverStartedAt = 0;
+      activeLinkPopupAllowedAt = 0;
       clearAnalysisLock();
       setPopupState("hidden");
+      startPendingLockedLinkIfStillHovered();
     }, POPUP_CLOSE_ANIMATION_MS);
+  } else {
+    clearAnalysisLock();
+    setPopupState("hidden");
+    startPendingLockedLinkIfStillHovered();
   }
 
   popupAnchor = null;

@@ -45,6 +45,9 @@ const CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 // 브라우저 저장소에 상태를 저장할 때 사용하는 이름표(키)
 const STATUS_STORAGE_KEY = "currentAnalysisStatus";
 
+const ANALYSIS_CACHE_STORAGE_KEY = "intoneAnalysisCache";
+const ANALYSIS_CACHE_MAX_ENTRIES = 160;
+
 const AI_ACTIVE_CREDENTIAL_INDEX_STORAGE_KEY = "aiActiveCredentialIndex";
 
 const LEARNED_NEWS_PATTERNS_STORAGE_KEY = "learnedNewsUrlPrefixes";
@@ -131,6 +134,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // 위 두 가지가 아닌 알 수 없는 메시지는 무시
+  if (message?.type === "CHECK_ANALYSIS_CACHE") {
+    const url = normalizeUrl(message.payload?.url || "");
+    getCachedResult(url)
+      .then((cached) => {
+        if (cached) {
+          updateStatus({
+            stage: "complete",
+            label: "캐시 결과 표시",
+            url,
+            detail: "같은 URL의 이전 분석 결과를 표시합니다.",
+            tabId: sender.tab?.id || null
+          });
+        }
+
+        sendResponse({ ok: true, cached: cached || null });
+      })
+      .catch(() => sendResponse({ ok: true, cached: null }));
+    return true;
+  }
+
   if (message?.type === "CHECK_KNOWN_NEWS_LINK") {
     const url = normalizeUrl(message.payload?.url || "");
     isKnownNewsUrl(url)
@@ -204,7 +227,7 @@ async function handleAnalyzeRequest(payload, sender) {
 
   // force_refresh가 true면 캐시를 무시하고 새로 분석
   // force_refresh가 false(기본값)이면 캐시에 결과가 있는지 먼저 확인
-  const cached = payload?.force_refresh ? null : getCachedResult(url);
+  const cached = payload?.force_refresh ? null : await getCachedResult(url);
   if (cached) {
     // 캐시된 결과가 있으면 AI 호출 없이 바로 반환 (빠르고 API 사용량 절약)
     updateStatus({
@@ -251,7 +274,7 @@ async function handleAnalyzeRequest(payload, sender) {
   // AI가 "뉴스 기사가 아니다"라고 판단한 경우
   if (!articleCheck.is_article) {
     const result = buildNotArticleResult(articleCheck); // 빈 점수 결과 객체 생성
-    setCachedResult(url, result);                        // 이것도 캐시에 저장
+    await setCachedResult(url, result);                        // 이것도 캐시에 저장
     updateStatus({
       stage: "not_article",
       label: "뉴스 기사 아님",
@@ -797,24 +820,40 @@ function validateAnalysis(value) {
   const credibilityBreakdown = value?.credibility_breakdown || {};
   const clickbaitBreakdown   = value?.clickbait_breakdown   || {};
 
+  // 세부 항목 점수는 먼저 항목별 최대 배점 안으로 보정합니다.
+  // 이후 이 항목 합계 80% + AI가 직접 판단한 전체 점수 20%를 더해
+  // 최종 신뢰도/어그로도 점수로 사용합니다.
+  const normalizedCredibilityBreakdown = {
+    source_clarity:   clampScore(credibilityBreakdown.source_clarity,  20), // 최대 20점
+    title_body_match: clampScore(credibilityBreakdown.title_body_match, 25), // 최대 25점
+    evidence_quality: clampScore(credibilityBreakdown.evidence_quality, 25),
+    neutrality:       clampScore(credibilityBreakdown.neutrality,       15),
+    context:          clampScore(credibilityBreakdown.context,          15)
+  };
+
+  const normalizedClickbaitBreakdown = {
+    exaggeration:        clampScore(clickbaitBreakdown.exaggeration,       20),
+    curiosity_gap:       clampScore(clickbaitBreakdown.curiosity_gap,      20),
+    title_body_mismatch: clampScore(clickbaitBreakdown.title_body_mismatch, 25),
+    emotional_trigger:   clampScore(clickbaitBreakdown.emotional_trigger,  20),
+    hidden_key_info:     clampScore(clickbaitBreakdown.hidden_key_info,    15)
+  };
+
+  const credibilityBreakdownTotal = sumScoreParts(normalizedCredibilityBreakdown);
+  const clickbaitBreakdownTotal   = sumScoreParts(normalizedClickbaitBreakdown);
+
+  const aiCredibilityScore = clampScore(value?.credibility_score);
+  const aiClickbaitScore   = clampScore(value?.clickbait_score);
+
+  const finalCredibilityScore = calculateWeightedFinalScore(credibilityBreakdownTotal, aiCredibilityScore);
+  const finalClickbaitScore   = calculateWeightedFinalScore(clickbaitBreakdownTotal,   aiClickbaitScore);
+
   return {
     is_article:        true,
-    credibility_score: clampScore(value?.credibility_score), // 전체 신뢰도 (0~100)
-    clickbait_score:   clampScore(value?.clickbait_score),   // 전체 어그로도 (0~100)
-    credibility_breakdown: {
-      source_clarity:   clampScore(credibilityBreakdown.source_clarity,  20), // 최대 20점
-      title_body_match: clampScore(credibilityBreakdown.title_body_match, 25), // 최대 25점
-      evidence_quality: clampScore(credibilityBreakdown.evidence_quality, 25),
-      neutrality:       clampScore(credibilityBreakdown.neutrality,       15),
-      context:          clampScore(credibilityBreakdown.context,          15)
-    },
-    clickbait_breakdown: {
-      exaggeration:        clampScore(clickbaitBreakdown.exaggeration,       20),
-      curiosity_gap:       clampScore(clickbaitBreakdown.curiosity_gap,      20),
-      title_body_mismatch: clampScore(clickbaitBreakdown.title_body_mismatch, 25),
-      emotional_trigger:   clampScore(clickbaitBreakdown.emotional_trigger,  20),
-      hidden_key_info:     clampScore(clickbaitBreakdown.hidden_key_info,    15)
-    },
+    credibility_score: finalCredibilityScore, // 세부 항목 합계 80% + AI 전체 판단 20%
+    clickbait_score:   finalClickbaitScore,   // 세부 항목 합계 80% + AI 전체 판단 20%
+    credibility_breakdown: normalizedCredibilityBreakdown,
+    clickbait_breakdown:   normalizedClickbaitBreakdown,
     article_summary: sanitizeText(value?.article_summary || "기사 요약을 생성하지 못했습니다.",  120),
     summary:         sanitizeText(value?.summary         || "분석 요약을 생성하지 못했습니다.",  180),
     warning:         sanitizeText(value?.warning         || "AI 판단은 참고용이며 최종 팩트체크가 아닙니다.", 180)
@@ -1183,6 +1222,27 @@ function clampScore(value, max = 100) {
 }
 
 /*
+  sumScoreParts: 세부 항목 점수를 모두 더합니다.
+  각 항목은 validateAnalysis()에서 이미 배점 안으로 보정된 값입니다.
+*/
+function sumScoreParts(parts) {
+  return Object.values(parts || {}).reduce((total, value) => total + clampScore(value), 0);
+}
+
+/*
+  calculateWeightedFinalScore: 최종 표시 점수를 계산합니다.
+  - 세부 항목 합계: 80%
+  - AI가 직접 판단한 전체 점수: 20%
+  예) 세부 항목 합계 70점, AI 전체 판단 90점이면
+      70 * 0.8 + 90 * 0.2 = 74점
+*/
+function calculateWeightedFinalScore(breakdownTotal, aiOverallScore) {
+  const breakdownScore = clampScore(breakdownTotal);
+  const aiScore = clampScore(aiOverallScore);
+  return clampScore((breakdownScore * 0.8) + (aiScore * 0.2));
+}
+
+/*
   normalizeUrl: URL을 표준 형식으로 정리합니다.
   http, https만 허용하고 나머지 프로토콜(ftp://, file:// 등)은 막습니다.
   URL 끝의 #anchor(페이지 내 위치 표시) 부분을 제거합니다.
@@ -1207,32 +1267,105 @@ function normalizeUrl(url) {
   결과가 있어도 저장된 지 6시간이 지났으면 삭제하고 null을 반환합니다.
   결과가 없으면 null을 반환합니다.
 */
-function getCachedResult(url) {
-  const cached = analysisCache.get(url); // Map에서 URL 키로 값을 가져옴
-
-  if (!cached) {
-    return null; // 캐시에 없음
-  }
-
-  // Date.now()는 현재 시각(밀리초), cached.savedAt은 저장된 시각
-  // 차이가 CACHE_TTL_MS(6시간)를 넘으면 만료된 것으로 판단
-  if (Date.now() - cached.savedAt > CACHE_TTL_MS) {
-    analysisCache.delete(url); // 만료된 캐시 삭제
+async function getCachedResult(url) {
+  if (!url) {
     return null;
   }
 
-  return cached.data; // 유효한 캐시 반환
+  const memoryEntry = analysisCache.get(url);
+  if (memoryEntry) {
+    if (Date.now() - memoryEntry.savedAt <= CACHE_TTL_MS) {
+      return memoryEntry.data;
+    }
+    analysisCache.delete(url);
+  }
+
+  const storageCache = await readPersistentAnalysisCache();
+  const storedEntry = storageCache[url];
+
+  if (!storedEntry) {
+    return null;
+  }
+
+  if (Date.now() - Number(storedEntry.savedAt || 0) > CACHE_TTL_MS) {
+    delete storageCache[url];
+    await writePersistentAnalysisCache(storageCache);
+    return null;
+  }
+
+  analysisCache.set(url, {
+    savedAt: storedEntry.savedAt,
+    data: storedEntry.data
+  });
+
+  return storedEntry.data;
 }
 
 /*
-  setCachedResult: 분석 결과를 현재 시각과 함께 메모리 캐시에 저장합니다.
-  같은 URL을 6시간 이내에 다시 분석하면 AI 호출 없이 이 값을 재사용합니다.
+  setCachedResult: 분석 결과를 현재 시각과 함께 메모리 캐시와
+  chrome.storage.local 영구 캐시에 동시에 저장합니다.
+  Service Worker가 종료되어 메모리 Map이 초기화되어도,
+  저장 기간 안에는 chrome.storage.local에서 다시 불러와 재사용합니다.
 */
-function setCachedResult(url, data) {
-  analysisCache.set(url, {
-    savedAt: Date.now(), // 저장 시각 기록 (TTL 계산용)
-    data                 // 실제 분석 결과 객체
+async function setCachedResult(url, data) {
+  if (!url || !data) {
+    return;
+  }
+
+  const entry = {
+    savedAt: Date.now(),
+    data
+  };
+
+  analysisCache.set(url, entry);
+
+  const storageCache = await readPersistentAnalysisCache();
+  storageCache[url] = entry;
+
+  prunePersistentAnalysisCache(storageCache);
+  await writePersistentAnalysisCache(storageCache);
+}
+
+async function readPersistentAnalysisCache() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([ANALYSIS_CACHE_STORAGE_KEY], (items) => {
+      if (chrome.runtime.lastError) {
+        resolve({});
+        return;
+      }
+
+      const cache = items?.[ANALYSIS_CACHE_STORAGE_KEY];
+      if (!cache || typeof cache !== "object" || Array.isArray(cache)) {
+        resolve({});
+        return;
+      }
+
+      resolve(cache);
+    });
   });
+}
+
+async function writePersistentAnalysisCache(cache) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [ANALYSIS_CACHE_STORAGE_KEY]: cache }, () => resolve());
+  });
+}
+
+function prunePersistentAnalysisCache(cache) {
+  const now = Date.now();
+
+  for (const [url, entry] of Object.entries(cache)) {
+    if (!entry || typeof entry !== "object" || now - Number(entry.savedAt || 0) > CACHE_TTL_MS) {
+      delete cache[url];
+    }
+  }
+
+  const entries = Object.entries(cache)
+    .sort((a, b) => Number(b[1]?.savedAt || 0) - Number(a[1]?.savedAt || 0));
+
+  for (const [url] of entries.slice(ANALYSIS_CACHE_MAX_ENTRIES)) {
+    delete cache[url];
+  }
 }
 
 /*
