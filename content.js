@@ -1980,7 +1980,7 @@ function renderScorePanel({ type, title, score, shortLabel, breakdown = {}, rows
         <div class="inton-score-number"><span>점수</span><b data-score="${toScore(score)}">0</b><small>/100</small></div>
       </header>
       <div class="inton-score-body">
-        <div class="inton-donut" style="--score:0;" data-score="${toScore(score)}" aria-label="${escapeHtml(title)} ${toScore(score)}점">
+        <div class="inton-donut" style="--score:0;" data-score="${toScore(score)}" data-digits="${String(toScore(score)).length}" aria-label="${escapeHtml(title)} ${toScore(score)}점">
           <strong>0</strong>
           <span>/100</span>
         </div>
