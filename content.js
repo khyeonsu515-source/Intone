@@ -1366,6 +1366,69 @@ function preserveButtonPosition(previousButtonRect) {
   restorePopupPosition({ left: nextLeft, top: nextTop });
 }
 
+/*
+  animateCountUp: 숫자 요소의 textContent를 0에서 target까지 부드럽게 증가시킵니다.
+  점수 도넛/배지가 나타날 때 숫자가 카운트업되는 효과를 위해 사용합니다.
+*/
+function animateCountUp(el, target, duration = 900) {
+  if (!el) {
+    return;
+  }
+  const safeTarget = Number.isFinite(target) ? target : 0;
+  const start = performance.now();
+
+  function tick(now) {
+    const progress = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = String(Math.round(safeTarget * eased));
+    if (progress < 1) {
+      requestAnimationFrame(tick);
+    } else {
+      el.textContent = String(safeTarget);
+    }
+  }
+
+  requestAnimationFrame(tick);
+}
+
+/*
+  animateScoreReveal: 세부 분석 카드가 처음 펼쳐질 때 도넛 차트, 막대 그래프,
+  점수 숫자가 0에서 실제 값까지 채워지는 애니메이션을 실행합니다.
+  details.dataset.scoreAnimated로 팝업 하나당 한 번만 실행되도록 막습니다.
+*/
+function animateScoreReveal(details) {
+  if (!details || details.dataset.scoreAnimated === "1") {
+    return;
+  }
+  details.dataset.scoreAnimated = "1";
+
+  const donuts = Array.from(details.querySelectorAll(".inton-donut"));
+  const rows = Array.from(details.querySelectorAll(".inton-score-row em"));
+  const scoreNumbers = Array.from(details.querySelectorAll(".inton-score-number b"));
+
+  requestAnimationFrame(() => {
+    donuts.forEach((donut, index) => {
+      const target = Number(donut.dataset.score) || 0;
+      window.setTimeout(() => {
+        donut.style.setProperty("--score", String(target));
+        animateCountUp(donut.querySelector("strong"), target, 900);
+      }, index * 90);
+    });
+
+    rows.forEach((em, index) => {
+      const targetWidth = em.dataset.targetWidth || "0%";
+      window.setTimeout(() => {
+        em.style.width = targetWidth;
+      }, 140 + index * 45);
+    });
+
+    scoreNumbers.forEach((b) => {
+      const target = Number(b.dataset.score) || 0;
+      animateCountUp(b, target, 900);
+    });
+  });
+}
+
 function toggleDetails(button) {
   const details = popup?.querySelector(".ai-news-popup__details");
   if (!details || !popup || popupState === "closing") {
@@ -1388,8 +1451,18 @@ function toggleDetails(button) {
   details.setAttribute("aria-hidden", willOpen ? "false" : "true");
   setPopupState(willOpen ? "detail" : "summary");
 
+  if (willOpen) {
+    animateScoreReveal(details);
+  }
+
   if (button) {
-    button.textContent = willOpen ? "간략히 보기" : "세부 분석 보기";
+    const label = button.querySelector(".inton-detail-button__label");
+    const text = willOpen ? "간략히 보기" : "세부 분석 보기";
+    if (label) {
+      label.textContent = text;
+    } else {
+      button.textContent = text;
+    }
     button.setAttribute("aria-expanded", willOpen ? "true" : "false");
   }
 
@@ -1764,6 +1837,14 @@ function showResultPopup(result) {
       </section>
     </section>
   `;
+
+  if (wasLoadingPopup) {
+    popupElement.classList.add("ai-news-popup--from-loading");
+    window.setTimeout(() => {
+      popupElement?.classList.remove("ai-news-popup--from-loading");
+    }, 320);
+  }
+
   showPopupElement(popupElement);
 
   const point = getPopupOpenPoint();
@@ -1896,11 +1977,11 @@ function renderScorePanel({ type, title, score, shortLabel, breakdown = {}, rows
           ${renderMetricIcon(iconType)}
           <h3>${escapeHtml(title)}</h3>
         </div>
-        <div class="inton-score-number"><span>점수</span><b>${toScore(score)}</b><small>/100</small></div>
+        <div class="inton-score-number"><span>점수</span><b data-score="${toScore(score)}">0</b><small>/100</small></div>
       </header>
       <div class="inton-score-body">
-        <div class="inton-donut" style="--score:${toScore(score)};" aria-label="${escapeHtml(title)} ${toScore(score)}점">
-          <strong>${toScore(score)}</strong>
+        <div class="inton-donut" style="--score:0;" data-score="${toScore(score)}" aria-label="${escapeHtml(title)} ${toScore(score)}점">
+          <strong>0</strong>
           <span>/100</span>
         </div>
         <div class="inton-score-list">
@@ -1923,7 +2004,7 @@ function renderScoreRow(key, label, max, breakdown, type) {
   return `
     <div class="inton-score-row inton-score-row--${escapeHtml(type)}">
       <span>${escapeHtml(label)}</span>
-      <i><em style="width:${percent}%"></em></i>
+      <i><em style="width:0%" data-target-width="${percent}%"></em></i>
       <b>${value}/${max}</b>
     </div>
   `;
@@ -1972,7 +2053,12 @@ function renderSummaryLines(summary, warning) {
 function renderActions(hasDetails) {
   return `
     <div class="inton-actions">
-      <button class="inton-detail-button" type="button" data-ai-news-action="toggle-details" aria-expanded="false" ${hasDetails ? "" : "disabled"}>세부 분석 보기</button>
+      <button class="inton-detail-button" type="button" data-ai-news-action="toggle-details" aria-expanded="false" ${hasDetails ? "" : "disabled"}>
+        <span class="inton-detail-button__label">세부 분석 보기</span>
+        <svg class="inton-detail-button__chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
   `;
 }
