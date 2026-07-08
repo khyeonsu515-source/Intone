@@ -52,6 +52,11 @@ const POPUP_REPOSITION_ANIMATION_MS = 240;
 const POPUP_APPEAR_ANIMATION_MS = 220;
 const POPUP_VIEWPORT_PADDING_PX = 8;
 
+// 요약/상세 카드가 펼쳐지거나 접힐 때, 팝업 높이 변화를 따라가며
+// top 위치를 매 프레임 재계산하는 추적 애니메이션 지속 시간.
+// 내부 카드의 max-height 전환(220ms)보다 넉넉하게 잡습니다.
+const POPUP_GROWTH_TRACK_MS = 300;
+
 // 결과 팝업이 링크 옆에 뜬 직후, 사용자가 링크에서 팝업으로 이동할 시간을 짧게 허용합니다.
 // 이 시간은 일반적인 닫힘 유예가 아니라, 초기 진입 안정화 전용입니다.
 const POPUP_ENTRY_GRACE_MS = 900;
@@ -105,6 +110,7 @@ let popupDeferredCloseTimer = null;
 let popupHideAnimationTimer = null;
 let popupRepositionTimer = null;
 let popupAppearAnimationTimer = null;
+let popupGrowthAnimationFrame = null;
 let lastPopupPosition = null;
 let lastPointerClientX = null;
 let lastPointerClientY = null;
@@ -1111,17 +1117,15 @@ function revealSummaryPanel() {
     return;
   }
 
-  const compactBefore = getCompactBarRect();
   markPopupLayoutChanging(POPUP_INTERACTION_GRACE_MS);
   setPopupState("summary");
 
   popup.classList.add("ai-news-popup--anchoring-summary");
   popup.classList.remove("ai-news-popup--summary-collapsed");
   popup.classList.add("ai-news-popup--summary-expanded");
+  trackPopupHeightForGrowth();
 
   requestAnimationFrame(() => {
-    preserveCompactBarPosition(compactBefore);
-    scheduleViewportClamp(360);
     popup?.classList.remove("ai-news-popup--anchoring-summary");
 
     // 요약 확장은 사용자가 팝업에 진입했을 때만 실행됩니다.
@@ -1131,11 +1135,6 @@ function revealSummaryPanel() {
     pointerInsidePopup = true;
     cancelPendingPopupClose();
   });
-}
-
-function getCompactBarRect() {
-  const compactBar = popup?.querySelector(".inton-compact-bar");
-  return compactBar ? compactBar.getBoundingClientRect() : null;
 }
 
 function getCurrentPopupPosition() {
@@ -1345,27 +1344,6 @@ function handlePopupClick(event) {
   내용이 바뀌면 팝업 높이가 달라지므로 keepPopupInViewport()도 호출합니다.
 */
 
-function preserveButtonPosition(previousButtonRect) {
-  if (!popup || !previousButtonRect) {
-    return;
-  }
-
-  const currentButton = popup.querySelector("[data-ai-news-action='toggle-details']");
-  if (!currentButton) {
-    return;
-  }
-
-  const currentRect = currentButton.getBoundingClientRect();
-  const currentPosition = getCurrentPopupPosition();
-  if (!currentPosition) {
-    return;
-  }
-
-  const nextLeft = currentPosition.left + (previousButtonRect.left - currentRect.left);
-  const nextTop = currentPosition.top + (previousButtonRect.top - currentRect.top);
-  restorePopupPosition({ left: nextLeft, top: nextTop });
-}
-
 /*
   animateCountUp: 숫자 요소의 textContent를 0에서 target까지 부드럽게 증가시킵니다.
   점수 도넛/배지가 나타날 때 숫자가 카운트업되는 효과를 위해 사용합니다.
@@ -1437,8 +1415,6 @@ function toggleDetails(button) {
 
   // 상세보기/간략히보기는 오직 이 버튼 클릭으로만 바뀝니다.
   // 마우스 이동, 스크롤, 위치 보정에서는 이 상태를 건드리지 않습니다.
-  const compactBefore = getCompactBarRect();
-  const buttonBefore = button ? button.getBoundingClientRect() : null;
   const willOpen = !details.classList.contains("is-open");
 
   if (willOpen) {
@@ -1466,17 +1442,12 @@ function toggleDetails(button) {
     button.setAttribute("aria-expanded", willOpen ? "true" : "false");
   }
 
-  requestAnimationFrame(() => {
-    if (willOpen) {
-      preserveCompactBarPosition(compactBefore);
-      scheduleViewportClamp(360);
-    } else {
-      // 간략히 보기로 접을 때는 클릭한 버튼의 화면 위치를 기준으로 팝업을 고정합니다.
-      // 이렇게 해야 버튼이 있던 팝업을 중심으로 상세 영역만 접히고, 팝업이 이전 위치로 튀지 않습니다.
-      preserveButtonPosition(buttonBefore);
-      scheduleViewportClamp(220);
-    }
+  // 상세 카드가 펼쳐지거나 접히는 동안, 팝업 높이 변화를 따라가며 top을 매 프레임
+  // 재계산합니다. 아래쪽에 공간이 있으면 간단표시창 위치가 고정된 채로 아래로만
+  // 늘어나고, 화면 끝에 닿으면 그때부터 위쪽으로 밀리며 필요한 공간을 확보합니다.
+  trackPopupHeightForGrowth();
 
+  requestAnimationFrame(() => {
     // 팝업 밖이면 즉시 닫습니다. 단, 간략히 보기 직후 위치 복귀로 다시 안쪽에 들어오면 유지됩니다.
     requestAnimationFrame(() => {
       if (!isPointerInsideActiveAreas()) {
@@ -2215,13 +2186,6 @@ function updatePopupViewportLimits() {
   popup.style.setProperty("--inton-summary-max-height", `${summaryMaxHeight}px`);
 }
 
-function scheduleViewportClamp(duration = POPUP_REPOSITION_ANIMATION_MS) {
-  window.requestAnimationFrame(() => clampPopupToViewport());
-  window.setTimeout(() => clampPopupToViewport(), 60);
-  window.setTimeout(() => clampPopupToViewport(), Math.max(120, duration));
-  window.setTimeout(() => clampPopupToViewport(), Math.max(260, duration + 120));
-}
-
 function getClampedPopupPosition(left, top) {
   if (!popup || popup.hidden) {
     return { left, top };
@@ -2322,27 +2286,72 @@ function positionPopup(clientX, clientY) {
   updateSummaryRevealDirection(left, top, height);
 }
 
-function preserveCompactBarPosition(compactBefore) {
-  if (!popup || popup.hidden || !compactBefore) {
+function stopPopupGrowthTracking() {
+  if (popupGrowthAnimationFrame) {
+    window.cancelAnimationFrame(popupGrowthAnimationFrame);
+    popupGrowthAnimationFrame = null;
+  }
+}
+
+/*
+  trackPopupHeightForGrowth: 요약/상세 카드가 펼쳐지거나(늘어남) 접힐 때(줄어듦)
+  팝업의 top 위치를 매 프레임 다시 계산해서, 위쪽 간단표시창(compact bar)의
+  화면 위치가 최대한 고정된 채로 팝업이 "아래로 늘어나고 위로 줄어드는" 것처럼 보이게 합니다.
+
+  알고리즘:
+    - homeTop: 간단표시창이 원래 있던(고정하고 싶은) 화면 위치
+    - limit: 팝업 아래쪽 가장자리가 넘으면 안 되는 화면 최대 y좌표
+    - 매 프레임 실제 렌더링된 팝업 높이(getBoundingClientRect)를 읽어서
+      top = min(homeTop, limit - 현재 높이) 로 계산합니다.
+
+  이렇게 하면 자동으로 2단계 동작이 나옵니다:
+    1) 아래쪽에 공간이 남아있는 동안에는 top이 homeTop에 고정된 채 아래로만 늘어남
+    2) 팝업 아래쪽이 화면 끝(limit)에 닿으면, 그 이후로는 top이 위로 밀리면서
+       (= 간단표시창 위치 고정이 풀리면서) 필요한 공간을 위쪽에서 확보함
+    3) 다시 줄어들 때는 같은 공식으로 top이 자연스럽게 homeTop 쪽으로 복귀함
+       (= 팝업이 위로 줄어드는 것처럼 보임)
+*/
+function trackPopupHeightForGrowth(durationMs = POPUP_GROWTH_TRACK_MS) {
+  if (!popup || popup.hidden) {
     return;
   }
 
-  const compactAfter = getCompactBarRect();
-  if (!compactAfter) {
-    return;
+  stopPopupGrowthTracking();
+
+  const rect = popup.getBoundingClientRect();
+  const homeTop = popupCompactHomePosition && Number.isFinite(popupCompactHomePosition.top)
+    ? popupCompactHomePosition.top
+    : (Number.parseFloat(popup.style.top) || rect.top);
+
+  const padding = POPUP_VIEWPORT_PADDING_PX;
+  const startedAt = performance.now();
+
+  function tick(now) {
+    if (!popup || popup.hidden) {
+      popupGrowthAnimationFrame = null;
+      return;
+    }
+
+    const currentHeight = popup.getBoundingClientRect().height;
+    const limit = window.innerHeight - padding;
+    const desiredTop = Math.min(homeTop, limit - currentHeight);
+    const nextTop = Math.max(padding, desiredTop);
+
+    const currentTop = Number.parseFloat(popup.style.top);
+    if (!Number.isFinite(currentTop) || Math.abs(currentTop - nextTop) > 0.4) {
+      popup.style.top = `${nextTop}px`;
+      lastPopupPosition = { left: Number.parseFloat(popup.style.left) || rect.left, top: nextTop };
+    }
+
+    if (now - startedAt < durationMs) {
+      popupGrowthAnimationFrame = window.requestAnimationFrame(tick);
+    } else {
+      popupGrowthAnimationFrame = null;
+      clampPopupToViewport();
+    }
   }
 
-  const popupRect = popup.getBoundingClientRect();
-  const currentLeft = Number.parseFloat(popup.style.left) || popupRect.left;
-  const currentTop = Number.parseFloat(popup.style.top) || popupRect.top;
-
-  const rawLeft = currentLeft + compactBefore.left - compactAfter.left;
-  const rawTop = currentTop + compactBefore.top - compactAfter.top;
-  const { left: nextLeft, top: nextTop } = getClampedPopupPosition(rawLeft, rawTop);
-
-  popup.style.left = `${nextLeft}px`;
-  popup.style.top = `${nextTop}px`;
-  lastPopupPosition = { left: nextLeft, top: nextTop };
+  popupGrowthAnimationFrame = window.requestAnimationFrame(tick);
 }
 
 function clampPopupToViewport() {
@@ -2413,6 +2422,7 @@ function resetPopupStateImmediately(options = {}) {
   window.clearTimeout(summaryRevealCloseTimer);
   window.clearTimeout(popupHideAnimationTimer);
   window.clearTimeout(popupRepositionTimer);
+  stopPopupGrowthTracking();
 
   if (popupCloseCheckFrame) {
     cancelAnimationFrame(popupCloseCheckFrame);
