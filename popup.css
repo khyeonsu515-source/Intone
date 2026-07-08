@@ -1102,6 +1102,12 @@
   text-align: center !important;
 }
 
+/* 100점(세 자리 숫자)일 때는 흰 원 안쪽 공간이 좁아 링 밖으로 삐져나가므로 글자를 줄임 */
+#ai-news-link-popup.ai-news-popup--separated .inton-donut[data-digits="3"] strong {
+  font-size: 15px !important;
+  letter-spacing: -0.03em !important;
+}
+
 #ai-news-link-popup.ai-news-popup--separated .inton-donut span {
   position: relative !important;
   z-index: 1 !important;
