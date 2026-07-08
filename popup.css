@@ -1442,12 +1442,16 @@
 
 #ai-news-link-popup.ai-news-popup--separated .inton-summary-card,
 #ai-news-link-popup.ai-news-popup--separated .inton-detail-card.ai-news-popup__details {
+  /* max-height/transform은 일부러 완만한(급출발하지 않는) 곡선을 씁니다.
+     이전에 쓰던 cubic-bezier(.2,.8,.2,1)은 전체 길이 변화의 대부분을
+     처음 30~40ms 안에 끝내버려서 "순간 팝"처럼 보이고 늘어나거나
+     줄어드는 모션이 거의 안 보였습니다. */
   transition:
-    max-height 220ms cubic-bezier(.2,.8,.2,1),
-    opacity 160ms ease,
-    transform 200ms cubic-bezier(.2,.8,.2,1),
-    padding 160ms ease,
-    border-width 160ms ease !important;
+    max-height 280ms cubic-bezier(.4, 0, .2, 1),
+    opacity 200ms ease,
+    transform 280ms cubic-bezier(.4, 0, .2, 1),
+    padding 200ms ease,
+    border-width 200ms ease !important;
 }
 
 @keyframes inton-popup-flicker-safe-in {
