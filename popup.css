@@ -31,55 +31,6 @@
   font: inherit;
 }
 
-#ai-news-link-popup .news-ai-card {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at 0 0, #ffffff, #ffffff 34%),
-    radial-gradient(circle at 100% 0, #ffffff, #ffffff 34%),
-    #ffffff;
-}
-
-#ai-news-link-popup .news-ai-header {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-}
-
-#ai-news-link-popup .news-ai-logo {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border-radius: 12px;
-  background: #ffffff;
-  overflow: hidden;
-  box-shadow: 0 10px 22px #ffffff;
-}
-
-#ai-news-link-popup .news-ai-logo img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-#ai-news-link-popup .news-ai-header h1 {
-  margin: 0;
-  color: #0f172a;
-  font-size: 15px;
-  line-height: 1.2;
-  letter-spacing: 0;
-}
-
-#ai-news-link-popup .news-ai-header p {
-  margin: 3px 0 0;
-  color: #64748b;
-  font-size: 11px;
-}
-
 #ai-news-link-popup .news-ai-score-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -272,45 +223,6 @@
   color: #0f172a;
 }
 
-#ai-news-link-popup .news-ai-loading,
-#ai-news-link-popup .news-ai-error {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  padding: 14px;
-  border: 1px solid #ffffff;
-  border-radius: 18px;
-  background: #ffffff;
-}
-
-#ai-news-link-popup .news-ai-loading__ring {
-  width: 38px;
-  height: 38px;
-  border: 3px solid #dbeafe;
-  border-top-color: #7c3aed;
-  border-radius: 50%;
-  animation: news-ai-spin 850ms linear infinite;
-  flex: 0 0 auto;
-}
-
-#ai-news-link-popup .news-ai-loading__title,
-#ai-news-link-popup .news-ai-error__title {
-  margin: 0;
-  color: #0f172a;
-  font-weight: 850;
-}
-
-#ai-news-link-popup .news-ai-loading__text,
-#ai-news-link-popup .news-ai-error__text {
-  margin: 4px 0 0;
-  color: #64748b;
-}
-
-#ai-news-link-popup.ai-news-popup--error {
-  border-color: #ffffff;
-  animation: news-ai-pop 400ms ease-out, news-ai-shake 400ms ease-in-out 380ms;
-}
-
 @keyframes news-ai-shake {
   10%, 90% { transform: translate3d(-1px, 0, 0); }
   20%, 80% { transform: translate3d(2px, 0, 0); }
@@ -319,10 +231,6 @@
 }
 
 @media (max-width: 380px) {
-  #ai-news-link-popup .news-ai-card {
-    padding: 14px;
-  }
-
   #ai-news-link-popup .news-ai-score-grid {
     grid-template-columns: 1fr;
   }
@@ -664,7 +572,8 @@
 }
 
 #ai-news-link-popup.ai-news-popup--separated .inton-icon--shield svg,
-#ai-news-link-popup.ai-news-popup--separated .inton-icon--fire svg {
+#ai-news-link-popup.ai-news-popup--separated .inton-icon--fire svg,
+#ai-news-link-popup.ai-news-popup--separated .inton-metric .inton-icon--warning svg {
   fill: currentColor !important;
 }
 
@@ -746,15 +655,23 @@
   margin: 0 0 11px !important;
 }
 
-#ai-news-link-popup.ai-news-popup--separated .inton-icon--summary {
+#ai-news-link-popup.ai-news-popup--separated .inton-icon--summary,
+#ai-news-link-popup.ai-news-popup--separated .inton-card-head .inton-icon--warning {
   display: grid !important;
   place-items: center !important;
 
   width: 26px !important;
   height: 26px !important;
 
-  color: #7c3aed !important;
   background: transparent !important;
+}
+
+#ai-news-link-popup.ai-news-popup--separated .inton-icon--summary {
+  color: #7c3aed !important;
+}
+
+#ai-news-link-popup.ai-news-popup--separated .inton-card-head .inton-icon--warning {
+  color: #dc2626 !important;
 }
 
 #ai-news-link-popup.ai-news-popup--separated .inton-icon--summary svg {
@@ -762,6 +679,14 @@
   width: 22px !important;
   height: 22px !important;
   fill: #7c3aed !important;
+  stroke: none !important;
+}
+
+#ai-news-link-popup.ai-news-popup--separated .inton-card-head .inton-icon--warning svg {
+  display: block !important;
+  width: 22px !important;
+  height: 22px !important;
+  fill: #dc2626 !important;
   stroke: none !important;
 }
 
@@ -1440,6 +1365,14 @@
   animation: inton-popup-flicker-safe-out 160ms ease-in both !important;
 }
 
+/* 오류 팝업: 등장 팝인 애니메이션이 끝나는 시점에 살짝 흔들어 문제 발생을 알립니다
+   (붉은 톤 배경/테두리는 아래 "visual polish" 섹션에서 적용) */
+#ai-news-link-popup.ai-news-popup--separated.ai-news-popup--error .inton-mini-shell {
+  animation:
+    inton-popup-flicker-safe-in 210ms cubic-bezier(.2,.8,.2,1) both,
+    news-ai-shake 400ms ease-in-out 380ms both !important;
+}
+
 #ai-news-link-popup.ai-news-popup--separated .inton-summary-card,
 #ai-news-link-popup.ai-news-popup--separated .inton-detail-card.ai-news-popup__details {
   /* max-height/transform은 일부러 완만한(급출발하지 않는) 곡선을 씁니다.
@@ -1531,6 +1464,19 @@
     0 22px 54px rgba(15, 23, 42, 0.26) !important;
 }
 
+/* 오류 상태는 같은 유리 느낌을 유지하되 붉은 톤으로 문제 상황을 알립니다 */
+#ai-news-link-popup.ai-news-popup--separated.ai-news-popup--error .inton-mini-shell {
+  border: 1px solid rgba(252, 165, 165, 0.95) !important;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(239, 35, 60, 0.12), transparent 34%),
+    radial-gradient(circle at 100% 8%, rgba(239, 68, 68, 0.13), transparent 36%),
+    linear-gradient(180deg, rgba(255, 251, 251, 0.98) 0%, rgba(255, 241, 242, 0.98) 100%) !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.92) inset,
+    0 0 32px rgba(248, 113, 113, 0.28),
+    0 22px 54px rgba(15, 23, 42, 0.22) !important;
+}
+
 /* 결과 간단 표시줄도 같은 유리 느낌으로 */
 #ai-news-link-popup.ai-news-popup--separated .inton-compact-bar {
   border-color: rgba(191, 219, 254, 0.92) !important;
@@ -1589,6 +1535,30 @@
   stroke: rgba(255, 255, 255, 0.72) !important;
   stroke-width: 0.8 !important;
   filter: drop-shadow(0 2px 4px rgba(124, 58, 237, 0.16)) !important;
+}
+
+/* 오류 카드 아이콘: 같은 카드 느낌을 유지하되 붉은 톤으로 */
+#ai-news-link-popup.ai-news-popup--separated .inton-card-head .inton-icon--warning {
+  position: relative !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 9px !important;
+  color: #dc2626 !important;
+  background:
+    linear-gradient(180deg, rgba(254, 242, 242, 1), rgba(254, 226, 226, 1)) !important;
+  border: 1px solid rgba(252, 165, 165, 0.85) !important;
+  box-shadow:
+    0 8px 18px rgba(220, 38, 38, 0.20),
+    inset 0 1px 0 rgba(255, 255, 255, 0.98) !important;
+}
+
+#ai-news-link-popup.ai-news-popup--separated .inton-card-head .inton-icon--warning svg {
+  width: 18px !important;
+  height: 18px !important;
+  fill: #dc2626 !important;
+  stroke: rgba(255, 255, 255, 0.72) !important;
+  stroke-width: 0.8 !important;
+  filter: drop-shadow(0 2px 4px rgba(220, 38, 38, 0.16)) !important;
 }
 
 #ai-news-link-popup.ai-news-popup--separated .inton-summary-body {

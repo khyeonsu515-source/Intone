@@ -1672,14 +1672,32 @@ function markPersistentErrorPopupShown(errorKey) {
 function showErrorPopup(message) {
   const popupElement = ensurePopup();
   setPopupState("error");
-  popupElement.className = "ai-news-popup ai-news-popup--error";
+  const logoUrl = chrome.runtime.getURL("assets/logo.png");
+  popupElement.className = "ai-news-popup ai-news-popup--error ai-news-popup--separated";
   popupElement.innerHTML = `
-    <section class="news-ai-card">
-      ${renderBrandHeader()}
-      <div class="news-ai-error">
-        <p class="news-ai-error__title">분석할 수 없습니다</p>
-        <p class="news-ai-error__text">${escapeHtml(message)}</p>
-      </div>
+    <section class="inton-mini-shell">
+      <header class="inton-compact-bar" aria-label="Intone 오류">
+        <div class="inton-logo-pill" aria-hidden="true">
+          <img src="${escapeHtml(logoUrl)}" alt="">
+        </div>
+        <div class="inton-status-pill">
+          <span class="inton-brand">Intone</span>
+          <span class="inton-metric inton-metric--bad" title="오류" aria-label="오류">
+            ${renderMetricIcon("warning")}
+            <strong>오류</strong>
+          </span>
+        </div>
+      </header>
+      <section class="inton-summary-card">
+        <header class="inton-card-head">
+          ${renderMetricIcon("warning")}
+          <h2>분석할 수 없습니다</h2>
+          <button class="inton-close" type="button" data-ai-news-action="close" aria-label="닫기">×</button>
+        </header>
+        <div class="inton-summary-body">
+          <p>${escapeHtml(message)}</p>
+        </div>
+      </section>
     </section>
   `;
   showPopupElement(popupElement);
@@ -1944,6 +1962,9 @@ function renderMetricIcon(type) {
   if (type === "fire") {
     return `<span class="inton-icon inton-icon--fire" aria-hidden="true"><svg viewBox="0 0 24 24" role="img"><path d="M13.2 2.5c.6 3.2-.7 4.8-2.2 6.4-1.3 1.4-2.8 2.9-2.8 5.3 0 3.9 3.1 6.8 7 6.8s6.8-2.8 6.8-6.8c0-3.1-1.7-5.4-3.8-7.2.2 2.1-.7 3.5-2 4.5.2-3.4-1.1-6.5-3-9Z"/><path d="M12.2 13c-1.5 1.4-2.2 2.3-2.2 4 0 2 1.6 3.5 3.7 3.5s3.8-1.5 3.8-3.6c0-1.6-.9-2.8-2.1-3.8-.1 1.3-.6 2.2-1.6 3 .1-1.5-.4-2.5-1.6-3.1Z" opacity=".4"/></svg></span>`;
   }
+  if (type === "warning") {
+    return `<span class="inton-icon inton-icon--warning" aria-hidden="true"><svg viewBox="0 0 24 24" role="img" fill-rule="evenodd" clip-rule="evenodd"><path d="M12 3.2c.46 0 .88.25 1.1.65l8.62 15.35c.5.9-.14 2.02-1.16 2.02H3.44c-1.02 0-1.66-1.11-1.16-2.02L10.9 3.85c.22-.4.64-.65 1.1-.65Zm-1 6v5.4h2V9.2h-2Zm0 7.2v2h2v-2h-2Z"/></svg></span>`;
+  }
   return `<span class="inton-icon inton-icon--summary" aria-hidden="true"><svg viewBox="0 0 24 24" role="img"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/></svg></span>`;
 }
 
@@ -1988,21 +2009,6 @@ function renderScoreRow(key, label, max, breakdown, type) {
       <i><em style="width:0%" data-target-width="${percent}%"></em></i>
       <b>${value}/${max}</b>
     </div>
-  `;
-}
-
-function renderBrandHeader(statusText = "AI 기반 기사 신뢰도 분석") {
-  const logoUrl = chrome.runtime.getURL("assets/icon48.png");
-  return `
-    <header class="news-ai-header">
-      <div class="news-ai-logo" aria-hidden="true">
-        <img src="${escapeHtml(logoUrl)}" alt="">
-      </div>
-      <div>
-        <h1>Intone</h1>
-        <p>${escapeHtml(statusText)}</p>
-      </div>
-    </header>
   `;
 }
 
