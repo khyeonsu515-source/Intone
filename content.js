@@ -1067,7 +1067,17 @@ function closePopupFromPointerExit() {
   }
 }
 
+/*
+  getPopupOpenPoint: 팝업을 어디에 띄울지 결정하는 기준 좌표를 반환합니다.
+  링크 위에서 처음 마우스가 멈춘 지점(popupOpenPoint)이 아니라,
+  팝업이 실제로 화면에 나타나는 "지금 이 순간"의 실제 커서 좌표를 우선 사용합니다.
+  hover 대기 시간(2초) 동안 커서가 링크를 따라 움직였다면, 대기 시작 지점이 아니라
+  현재 커서 위치 근처에 팝업이 뜨도록 하기 위함입니다.
+*/
 function getPopupOpenPoint() {
+  if (typeof lastPointerClientX === "number" && typeof lastPointerClientY === "number") {
+    return { x: lastPointerClientX, y: lastPointerClientY };
+  }
   return popupOpenPoint || popupAnchor;
 }
 
@@ -2222,7 +2232,9 @@ function getClampedPopupPosition(left, top) {
 */
 function positionPopup(clientX, clientY) {
   const popupElement = ensurePopup();
-  const margin = 8;
+  // 커서 대각선 방향으로 이 정도는 떨어뜨려야 팝업이 뜨자마자 커서 스프라이트에
+  // 바로 맞닿지 않습니다 (8px는 화살표 커서 몸통과 거의 겹쳐 보였습니다).
+  const margin = 16;
   const viewportPadding = POPUP_VIEWPORT_PADDING_PX;
   popupAnchor = { x: clientX, y: clientY };
   updatePopupViewportLimits();
