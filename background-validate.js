@@ -2,6 +2,37 @@
 // AI 응답을 검사하고 안전한 값으로 정제하는 함수들
 // ─────────────────────────────────────────────
 
+// direction.stance에 허용되는 값 목록. AI가 이 중 하나를 반환하지 않으면 "중립적"으로 대체합니다.
+const ANALYSIS_STANCE_VALUES = ["긍정적", "부정적", "중립적", "비판적", "옹호적"];
+
+/*
+  sanitizeKeywordList: topic/core_keywords/framing_keywords처럼 문자열 배열로
+  와야 하는 값을 검증합니다. 배열이 아니거나 항목이 문자열이 아니면 제외하고,
+  너무 긴 항목은 잘라내며, 개수도 maxCount개까지만 남깁니다.
+  이 키워드들은 화면에 표시되지 않고 Firebase 저장(기사 매칭)에만 사용됩니다.
+*/
+function sanitizeKeywordList(value, maxCount) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item) => typeof item === "string" && item.trim())
+    .map((item) => sanitizeText(item, 60))
+    .slice(0, maxCount);
+}
+
+/*
+  validateDirection: direction 객체({stance, summary})를 검증합니다.
+  stance가 허용된 값이 아니면 "중립적"으로 대체합니다.
+*/
+function validateDirection(value) {
+  const stance = ANALYSIS_STANCE_VALUES.includes(value?.stance) ? value.stance : "중립적";
+  return {
+    stance,
+    summary: sanitizeText(value?.summary || "", 200)
+  };
+}
+
 /*
   validateArticleCheck: AI가 반환한 뉴스 판별 결과를 검증합니다.
   AI가 예상치 못한 형식으로 답하거나 값이 빠져 있어도
@@ -93,7 +124,14 @@ function validateAnalysis(value) {
     clickbait_breakdown:   normalizedClickbaitBreakdown,
     article_summary: sanitizeText(value?.article_summary || "기사 요약을 생성하지 못했습니다.",  120),
     summary:         sanitizeText(value?.summary         || "분석 요약을 생성하지 못했습니다.",  180),
-    warning:         sanitizeText(value?.warning         || "AI 판단은 참고용이며 최종 팩트체크가 아닙니다.", 180)
+    warning:         sanitizeText(value?.warning         || "AI 판단은 참고용이며 최종 팩트체크가 아닙니다.", 180),
+
+    // 아래 네 항목은 팝업에는 표시하지 않고, 같은 사건을 다룬 다른 기사와
+    // 매칭하기 위한 용도로만 Firebase(Firestore)에 저장됩니다.
+    topic:             sanitizeText(value?.topic || "", 60),
+    core_keywords:     sanitizeKeywordList(value?.core_keywords, 6),
+    framing_keywords:  sanitizeKeywordList(value?.framing_keywords, 5),
+    direction:         validateDirection(value?.direction)
   };
 }
 
