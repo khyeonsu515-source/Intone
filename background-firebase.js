@@ -208,26 +208,35 @@ async function getSharedCachedResult(url) {
 }
 
 /*
-  getRecentTopics: topics 컬렉션(사건/이슈 단위로 정리된 색인)에서 최근
-  업데이트된 주제들을 가져옵니다. 새 기사를 분석하기 전에 이 목록을 AI에게
-  참고자료로 보여주고 "같은 사건이면 이 topic/keywords를 그대로 재사용해라"라고
-  지시하기 위한 것으로, 기사마다 따로따로 키워드를 지어내서 같은 사건인데도
-  문자열이 겹치지 않는 문제를 줄이기 위한 용도입니다. 실패하면 빈 배열을
-  반환해서 분석 자체는 평소대로(참고 목록 없이) 진행되게 합니다.
+  findTopicMatchForArticle: 기사를 AI로 분석하기 "전에" 먼저 호출합니다.
+  최근 등록된 키워드들을 keywordIndex에서 가져와서, 이 기사의 텍스트
+  (제목/메타/본문 일부를 합친 문자열) 안에 그 키워드가 그대로(부분 문자열로)
+  등장하는지 하나씩 확인합니다. AI에게 매번 새로 키워드를 지어내게 하는 대신,
+  이미 알고 있는 키워드가 실제로 이 기사에 등장하는지를 코드로 직접 확인하는
+  방식이라 훨씬 안정적으로 같은 사건을 찾아낼 수 있습니다.
+
+  반환값:
+    matchedTopic   - 후보 주제가 정확히 하나로 좁혀지면 그 주제 문서(확실한
+                      매칭). 이 경우 buildAnalysisPrompt는 AI에게 topic/
+                      core_keywords를 아예 요청하지 않습니다.
+    candidateTopics - 겹치는 키워드로 찾은 모든 후보 주제(0개, 1개, 여러 개
+                      모두 가능). matchedTopic이 없을 때 AI에게 참고자료로
+                      건네줍니다.
 */
-async function getRecentTopics(maxCount = TOPIC_CANDIDATE_LIMIT) {
+async function findTopicMatchForArticle(searchableText, maxKeywords = TOPIC_CANDIDATE_LIMIT) {
   const config = await getFirebaseConfig();
-  if (!config) {
-    return [];
+  const text = typeof searchableText === "string" ? searchableText : "";
+  if (!config || !text) {
+    return { matchedTopic: null, candidateTopics: [] };
   }
 
   try {
     const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents:runQuery?key=${config.apiKey}`;
     const body = JSON.stringify({
       structuredQuery: {
-        from: [{ collectionId: TOPICS_COLLECTION }],
+        from: [{ collectionId: KEYWORD_INDEX_COLLECTION }],
         orderBy: [{ field: { fieldPath: "updatedAt" }, direction: "DESCENDING" }],
-        limit: maxCount
+        limit: maxKeywords
       }
     });
 
@@ -238,30 +247,40 @@ async function getRecentTopics(maxCount = TOPIC_CANDIDATE_LIMIT) {
     });
 
     if (!response.ok) {
-      console.warn("[Intone/Firestore] 주제 목록 조회 실패", response.status, await response.text());
-      return [];
+      console.warn("[Intone/Firestore] 키워드 매칭 조회 실패", response.status, await response.text());
+      return { matchedTopic: null, candidateTopics: [] };
     }
 
     const rows = await response.json();
-    const topics = [];
+    const matchedTopicIds = new Set();
 
     for (const row of Array.isArray(rows) ? rows : []) {
       const record = row?.document?.fields ? firestoreFieldsToObject(row.document.fields) : null;
-      if (!record?.topic) {
+      const keyword = typeof record?.keyword === "string" ? record.keyword.trim() : "";
+      if (!keyword || !text.includes(keyword)) {
         continue;
       }
-      // 프롬프트에는 core_keywords라는 이름으로 보여줘서, AI 응답 스키마와
-      // 똑같은 키 이름을 쓰도록 맞춥니다(헷갈리지 않게).
-      topics.push({
-        topic: record.topic,
-        core_keywords: Array.isArray(record.keywords) ? record.keywords : []
-      });
+      (record.topicIds || []).forEach((id) => matchedTopicIds.add(id));
     }
 
-    return topics;
+    if (!matchedTopicIds.size) {
+      return { matchedTopic: null, candidateTopics: [] };
+    }
+
+    const candidateTopicDocs = (await Promise.all([...matchedTopicIds].map((id) => getTopicById(id)))).filter(Boolean);
+    const candidateTopics = candidateTopicDocs.map((doc) => ({
+      topic: doc.topic,
+      core_keywords: Array.isArray(doc.keywords) ? doc.keywords : []
+    }));
+
+    // 후보가 정확히 하나로 좁혀졌을 때만 "확실한 매칭"으로 보고 AI에게
+    // 재질문 없이 그대로 재사용합니다. 여러 개면 AI에게 판단을 맡깁니다.
+    const matchedTopic = candidateTopicDocs.length === 1 ? candidateTopics[0] : null;
+
+    return { matchedTopic, candidateTopics };
   } catch (error) {
-    console.warn("[Intone/Firestore] 주제 목록 조회 오류", error);
-    return [];
+    console.warn("[Intone/Firestore] 키워드 매칭 조회 오류", error);
+    return { matchedTopic: null, candidateTopics: [] };
   }
 }
 

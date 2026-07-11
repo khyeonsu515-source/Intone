@@ -35,15 +35,16 @@ async function requestArticleCheck(credentials, payload) {
   신뢰도 점수, 어그로도 점수, 세부 항목 점수, 요약 등을 AI에게 요청합니다.
   requestArticleCheck와 구조는 동일하지만 다른 프롬프트를 사용합니다.
 
-  existingTopics: Firestore에 이미 저장된 topic/core_keywords 후보 목록.
-  주어지면 buildAnalysisPrompt가 "같은 사건이면 이 값을 그대로 재사용하라"는
-  지시를 프롬프트에 덧붙입니다(getRecentTopicCandidates 참고).
+  topicContext: { existingTopics, resolvedTopic } — findTopicMatchForArticle()로
+  키워드 인덱스를 조회한 결과. resolvedTopic이 있으면(확실한 매칭) AI에게
+  topic/core_keywords를 아예 요청하지 않고, 없으면(모호하거나 매칭 없음)
+  existingTopics를 참고자료로 주고 AI가 직접 만들게 합니다.
 */
-async function requestGroqAnalysis(credentials, payload, existingTopics) {
+async function requestGroqAnalysis(credentials, payload, topicContext) {
   return requestGroqJson(credentials, [
     {
       role: "system",
-      content: buildAnalysisPrompt(existingTopics)
+      content: buildAnalysisPrompt(topicContext)
     },
     {
       role: "user",

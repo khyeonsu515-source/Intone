@@ -233,13 +233,28 @@ async function handleAnalyzeRequest(payload, sender) {
     await learnNewsPatternFromConfirmedArticle(credentials, analysisInput).catch(() => {});
   }
 
-  // 같은 사건을 다룬 기사끼리 topic/keywords가 겹치도록, 이미 저장된 주제
-  // 목록을 먼저 가져와서 AI에게 참고자료로 넘깁니다. 실패해도(빈 배열이어도)
-  // 분석 자체는 평소대로 진행됩니다.
-  const existingTopics = await getRecentTopics().catch(() => []);
-  const analysis  = await requestGroqAnalysis(credentials, analysisInput, existingTopics);
+  // 같은 사건을 다룬 기사끼리 묶이도록, AI에게 topic/keywords를 새로 지어
+  // 내게 하기 전에 먼저 이미 알고 있는 키워드가 이 기사 텍스트에 실제로
+  // 등장하는지 확인합니다(findTopicMatchForArticle). 후보가 하나로 확실히
+  // 좁혀지면(resolvedTopic) AI에게 topic/core_keywords를 아예 묻지 않고
+  // 그 값을 그대로 씁니다. 모호하거나(후보 여러 개) 아예 없으면 AI에게
+  // 새로 만들게 하되, 있는 후보는 참고자료로 건네줍니다.
+  const searchableText = [
+    analysisInput.page_title,
+    analysisInput.og_title,
+    analysisInput.link_text,
+    analysisInput.article_text
+  ].filter(Boolean).join(" ");
+  const { matchedTopic, candidateTopics } = await findTopicMatchForArticle(searchableText)
+    .catch(() => ({ matchedTopic: null, candidateTopics: [] }));
+
+  const analysis  = await requestGroqAnalysis(credentials, analysisInput, {
+    existingTopics: candidateTopics,
+    resolvedTopic: matchedTopic
+  });
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
-  const validated = validateAnalysis(analysis);
+  // (resolvedTopic이 있으면 topic/core_keywords는 AI 응답 대신 이 값을 그대로 씀)
+  const validated = validateAnalysis(analysis, matchedTopic);
 
   // 분석 결과를 캐시에 저장 (6시간 동안 같은 URL 재분석 시 재사용)
   setCachedResult(url, validated);

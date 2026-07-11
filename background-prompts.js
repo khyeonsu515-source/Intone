@@ -54,36 +54,23 @@ function buildNewsSitePatternPrompt() {
 }
 
 /*
-  buildAnalysisPrompt: existingTopics가 주어지면, "이미 데이터베이스에 있는
-  주제 목록이니 같은 사건이면 그대로 재사용하라"는 지시와 함께 프롬프트 끝에
-  덧붙입니다. 기사마다 독립적으로 키워드를 새로 지어내면 같은 사건이어도
-  문자열이 겹치지 않는 문제가 있어서, 기존 목록을 참고자료로 주고 "새로
-  만들지 말고 골라 써라"라고 유도하기 위한 것입니다.
+  buildAnalysisPrompt: 신뢰도·어그로도 분석 프롬프트를 만듭니다.
+  topic/core_keywords를 다루는 방식이 두 가지로 나뉩니다.
+
+  ① resolvedTopic이 주어진 경우 (키워드 인덱스에서 이미 확실한 주제를 찾은
+     경우): topic/core_keywords는 이미 정해졌으므로 AI에게 요청조차 하지
+     않습니다. 프롬프트에서 이 필드들에 대한 설명과 JSON 예시를 아예 빼고,
+     "이미 확인된 사건이다"라고만 알려줍니다. 대신 direction(이 기사만의
+     관점)과 framing_keywords(이 기사만의 논조 키워드)는 기사마다 다를 수
+     있으므로 항상 새로 판단하게 합니다.
+
+  ② resolvedTopic이 없는 경우 (일치하는 키워드가 없거나, 여러 후보가 있어
+     모호한 경우): 기존과 동일하게 topic/core_keywords를 AI가 직접
+     만들게 하되, existingTopics가 있으면(모호한 후보들) 참고자료로 주고
+     "같은 사건이면 그대로 재사용, 아니면 새로 만들어라"라고 지시합니다.
 */
-function buildAnalysisPrompt(existingTopics = []) {
-  const topicList = Array.isArray(existingTopics) ? existingTopics.filter((item) => item?.topic) : [];
-
-  const existingTopicsSection = topicList.length
-    ? `
-[기존 주제 목록 — 데이터베이스에 이미 저장된 사건/이슈들이다]
-아래 목록 중 이 기사와 "같은 사건/이슈"를 다루는 항목이 있으면, topic과
-core_keywords를 항목에 있는 값 그대로 재사용해라(띄어쓰기 하나까지 똑같이,
-새로 짓지 마라). 같은 사건이 아니면 새로 만들어라. 목록:
-${JSON.stringify(topicList, null, 2)}
-`
-    : `
-[기존 주제 목록]
-아직 저장된 주제가 없다. topic/core_keywords를 새로 만들어라.
-`;
-
-  return `
-너는 뉴스 링크의 신뢰도와 어그로도를 평가하는 분석기다.
-이미 뉴스 기사로 판별된 링크만 입력된다.
-반드시 사용자가 제공한 제목, URL, 메타 정보, 본문 일부만 근거로 삼아라.
-정보가 부족하면 임의로 사실을 추정하지 말고 낮은 확신을 반영해라.
-article_summary는 기사 내용을 1문장으로 짧게 요약해라.
-응답은 설명 문장 없이 오직 JSON 객체 하나만 반환해라.
-
+function buildAnalysisPrompt({ existingTopics = [], resolvedTopic = null } = {}) {
+  const scoringSections = `
 [신뢰도 credibility_score: 0~100점]
 - 출처 명확성: 20점
   기자명, 언론사, 작성일, 공식 출처 존재 여부
@@ -108,23 +95,9 @@ article_summary는 기사 내용을 1문장으로 짧게 요약해라.
   분노, 공포, 혐오, 불안, 논란을 과도하게 유도하는 정도
 - 핵심 정보 은폐: 15점
   제목에서 중요한 주어·대상·결과를 숨기는 정도
+`;
 
-[주제/키워드 분류 — 같은 사건을 다룬 다른 기사와 나중에 매칭하기 위한 용도이며 화면에는 표시되지 않는다]
-- topic: 기사가 다루는 핵심 주제를 한 문장(20자 내외)으로 요약
-- core_keywords: 이 사건/이슈를 다른 기사와 매칭하기 위한 "논조 중립적" 고유 식별 키워드 3~6개.
-  반드시 다음 원칙을 따른다.
-  · 정책명, 법안명, 기관명, 인물명, 날짜/시기, 구체적 수치 등 "사실 그 자체"만 포함한다.
-  · 긍정/부정 어느 쪽 기사든 동일하게 등장할 수밖에 없는 단어만 선택한다.
-  · "특혜", "완화", "논란", "효과" 같은 평가성·감정성 표현은 절대 포함하지 않는다.
-  · 예: "종합부동산세 개편안", "다주택자 세율", "2026년 7월", "국토교통부", "1주택자 특별공제"
-- framing_keywords: 이 기사만의 논조/프레임을 드러내는 키워드 2~5개 (예: "부자 감세", "시장 정상화", "형평성 논란" 등 — 여기는 논조 색깔이 있어도 된다)
-- direction: 기사의 관점을 나타내는 객체
-  · stance: "긍정적" | "부정적" | "중립적" | "비판적" | "옹호적" 중 하나
-  · reason: 왜 그 관점(stance)으로 판단했는지 1~2문장 (summary/article_summary와 겹치지 않게, 논조 판단 근거만 적는다)
-${existingTopicsSection}
-아래 형식과 키를 그대로 사용해라.
-{
-  "is_article": true,
+  const baseFields = `  "is_article": true,
   "credibility_score": 72,
   "clickbait_score": 38,
   "credibility_breakdown": {
@@ -143,14 +116,85 @@ ${existingTopicsSection}
   },
   "article_summary": "정부 발표에 따른 정책 변화와 관련 반응을 다룬 기사입니다.",
   "summary": "공식 자료 인용은 있으나 제목에 약간의 클릭 유도 표현이 있음",
-  "warning": "제목만 보고 판단하지 말고 본문 근거를 확인하세요.",
-  "topic": "정부의 부동산 세제 개편안 발표",
-  "core_keywords": ["종합부동산세 개편안", "다주택자 세율", "국토교통부", "2026년 7월 발표"],
-  "framing_keywords": ["부자 감세 논란", "형평성 훼손"],
+  "warning": "제목만 보고 판단하지 말고 본문 근거를 확인하세요."`;
+
+  const directionFields = `  "framing_keywords": ["부자 감세 논란", "형평성 훼손"],
   "direction": {
     "stance": "비판적",
     "reason": "세제 개편이 다주택자에게 실질적 혜택을 주는 반면 서민 부담은 늘어난다는 점을 강조"
+  }`;
+
+  if (resolvedTopic?.topic) {
+    const keywordList = Array.isArray(resolvedTopic.core_keywords) ? resolvedTopic.core_keywords : [];
+    return `
+너는 뉴스 링크의 신뢰도와 어그로도를 평가하는 분석기다.
+이미 뉴스 기사로 판별된 링크만 입력된다.
+반드시 사용자가 제공한 제목, URL, 메타 정보, 본문 일부만 근거로 삼아라.
+정보가 부족하면 임의로 사실을 추정하지 말고 낮은 확신을 반영해라.
+article_summary는 기사 내용을 1문장으로 짧게 요약해라.
+응답은 설명 문장 없이 오직 JSON 객체 하나만 반환해라.
+${scoringSections}
+[이 기사의 주제는 이미 확인되었다 — topic/core_keywords는 요청하지 않는다]
+이 기사는 데이터베이스에서 키워드가 겹치는 걸로 확인되어, 이미 다음과 같은
+사건으로 확정되었다:
+  topic: "${resolvedTopic.topic}"
+  core_keywords: ${JSON.stringify(keywordList)}
+이 두 값은 이미 확정되었으니 응답 JSON에 topic/core_keywords 필드를
+포함하지 마라. 대신 아래 두 항목은 기사마다 다를 수 있으므로 이 기사
+내용을 직접 보고 새로 판단해라.
+- framing_keywords: 이 기사만의 논조/프레임을 드러내는 키워드 2~5개
+- direction: 기사의 관점 { stance: "긍정적"|"부정적"|"중립적"|"비판적"|"옹호적", reason: 판단 근거 1~2문장 }
+
+아래 형식과 키를 그대로 사용해라(topic/core_keywords는 포함하지 않는다).
+{
+${baseFields},
+${directionFields}
+}
+`.trim();
   }
+
+  const topicList = Array.isArray(existingTopics) ? existingTopics.filter((item) => item?.topic) : [];
+  const existingTopicsSection = topicList.length
+    ? `
+[기존 주제 후보 — 데이터베이스에서 이 기사와 키워드가 겹치는 것으로 확인된 사건들이다]
+아래 후보 중 이 기사와 "같은 사건/이슈"를 다루는 항목이 있으면, topic과
+core_keywords를 항목에 있는 값 그대로 재사용해라(띄어쓰기 하나까지 똑같이,
+새로 짓지 마라). 여러 후보가 있지만 이 기사와 다른 사건이라면 새로
+만들어라. 후보:
+${JSON.stringify(topicList, null, 2)}
+`
+    : `
+[기존 주제 후보]
+겹치는 키워드를 가진 기존 주제가 없다. topic/core_keywords를 새로 만들어라.
+`;
+
+  return `
+너는 뉴스 링크의 신뢰도와 어그로도를 평가하는 분석기다.
+이미 뉴스 기사로 판별된 링크만 입력된다.
+반드시 사용자가 제공한 제목, URL, 메타 정보, 본문 일부만 근거로 삼아라.
+정보가 부족하면 임의로 사실을 추정하지 말고 낮은 확신을 반영해라.
+article_summary는 기사 내용을 1문장으로 짧게 요약해라.
+응답은 설명 문장 없이 오직 JSON 객체 하나만 반환해라.
+${scoringSections}
+[주제/키워드 분류 — 같은 사건을 다룬 다른 기사와 나중에 매칭하기 위한 용도이며 화면에는 표시되지 않는다]
+- topic: 기사가 다루는 핵심 주제를 한 문장(20자 내외)으로 요약
+- core_keywords: 이 사건/이슈를 다른 기사와 매칭하기 위한 "논조 중립적" 고유 식별 키워드 3~6개.
+  반드시 다음 원칙을 따른다.
+  · 정책명, 법안명, 기관명, 인물명, 날짜/시기, 구체적 수치 등 "사실 그 자체"만 포함한다.
+  · 긍정/부정 어느 쪽 기사든 동일하게 등장할 수밖에 없는 단어만 선택한다.
+  · "특혜", "완화", "논란", "효과" 같은 평가성·감정성 표현은 절대 포함하지 않는다.
+  · 예: "종합부동산세 개편안", "다주택자 세율", "2026년 7월", "국토교통부", "1주택자 특별공제"
+- framing_keywords: 이 기사만의 논조/프레임을 드러내는 키워드 2~5개 (예: "부자 감세", "시장 정상화", "형평성 논란" 등 — 여기는 논조 색깔이 있어도 된다)
+- direction: 기사의 관점을 나타내는 객체
+  · stance: "긍정적" | "부정적" | "중립적" | "비판적" | "옹호적" 중 하나
+  · reason: 왜 그 관점(stance)으로 판단했는지 1~2문장 (summary/article_summary와 겹치지 않게, 논조 판단 근거만 적는다)
+${existingTopicsSection}
+아래 형식과 키를 그대로 사용해라.
+{
+${baseFields},
+  "topic": "정부의 부동산 세제 개편안 발표",
+  "core_keywords": ["종합부동산세 개편안", "다주택자 세율", "국토교통부", "2026년 7월 발표"],
+${directionFields}
 }
 `.trim();
 }

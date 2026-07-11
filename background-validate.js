@@ -82,8 +82,14 @@ function buildNotArticleResult(articleCheck) {
   점수를 각 항목의 최대 점수 범위 안으로 강제로 맞추고,
   텍스트 필드는 길이를 제한하며 공백을 정리합니다.
   이 과정을 거쳐야 content.js에서 안전하게 화면에 출력할 수 있습니다.
+
+  resolvedTopic이 주어지면(키워드 인덱스에서 이미 확실한 주제를 찾은 경우)
+  topic/core_keywords는 AI 응답을 쓰지 않고 이 값을 그대로 사용합니다 —
+  애초에 이 경우 AI에게 그 필드를 요청하지도 않았기 때문입니다
+  (buildAnalysisPrompt 참고). framing_keywords/direction은 이 기사만의
+  값이라 항상 AI 응답에서 읽습니다.
 */
-function validateAnalysis(value) {
+function validateAnalysis(value, resolvedTopic = null) {
   // 세부 항목 객체가 없으면 빈 객체로 대체해서 이후 접근 시 오류를 방지
   const credibilityBreakdown = value?.credibility_breakdown || {};
   const clickbaitBreakdown   = value?.clickbait_breakdown   || {};
@@ -128,8 +134,12 @@ function validateAnalysis(value) {
 
     // 아래 네 항목은 팝업에는 표시하지 않고, 같은 사건을 다룬 다른 기사와
     // 매칭하기 위한 용도로만 Firebase(Firestore)에 저장됩니다.
-    topic:             sanitizeText(value?.topic || "", 60),
-    core_keywords:     sanitizeKeywordList(value?.core_keywords, 6),
+    topic: resolvedTopic?.topic
+      ? sanitizeText(resolvedTopic.topic, 60)
+      : sanitizeText(value?.topic || "", 60),
+    core_keywords: resolvedTopic?.topic
+      ? sanitizeKeywordList(resolvedTopic.core_keywords, 6)
+      : sanitizeKeywordList(value?.core_keywords, 6),
     framing_keywords:  sanitizeKeywordList(value?.framing_keywords, 5),
     direction:         validateDirection(value?.direction)
   };
