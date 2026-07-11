@@ -2,8 +2,9 @@
 // AI 응답을 검사하고 안전한 값으로 정제하는 함수들
 // ─────────────────────────────────────────────
 
-// direction.stance에 허용되는 값 목록. AI가 이 중 하나를 반환하지 않으면 "중립적"으로 대체합니다.
-const ANALYSIS_STANCE_VALUES = ["긍정적", "부정적", "중립적", "비판적", "옹호적"];
+// direction.stance에 허용되는 값 목록. 부정 ~ 긍정 단일 스펙트럼이며, 순서 자체가
+// 그 스펙트럼 위치를 나타냅니다. AI가 이 중 하나를 반환하지 않으면 "중립적"으로 대체합니다.
+const ANALYSIS_STANCE_VALUES = ["매우 부정적", "약간 부정적", "중립적", "약간 긍정적", "매우 긍정적"];
 
 /*
   sanitizeKeywordList: topic/core_keywords/framing_keywords처럼 문자열 배열로
