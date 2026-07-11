@@ -54,8 +54,8 @@ const POPUP_VIEWPORT_PADDING_PX = 8;
 
 // 요약/상세 카드가 펼쳐지거나 접힐 때, 팝업 높이 변화를 따라가며
 // top 위치를 매 프레임 재계산하는 추적 애니메이션 지속 시간.
-// 내부 카드의 max-height 전환(520ms, popup.css)보다 넉넉하게 잡습니다.
-const POPUP_GROWTH_TRACK_MS = 600;
+// 내부 카드의 max-height 전환(850ms, popup.css)보다 넉넉하게 잡습니다.
+const POPUP_GROWTH_TRACK_MS = 950;
 
 // 결과 팝업이 링크 옆에 뜬 직후, 사용자가 링크에서 팝업으로 이동할 시간을 짧게 허용합니다.
 // 이 시간은 일반적인 닫힘 유예가 아니라, 초기 진입 안정화 전용입니다.
