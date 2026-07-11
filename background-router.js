@@ -255,6 +255,8 @@ async function handleAnalyzeRequest(payload, sender) {
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
   // (resolvedTopic이 있으면 topic/core_keywords는 AI 응답 대신 이 값을 그대로 씀)
   const validated = validateAnalysis(analysis, matchedTopic);
+  // 대표 이미지는 AI 분석과 무관하게 페이지에서 그대로 뽑아온 값이라 별도로 붙입니다.
+  validated.image_url = resolveImageUrl(extracted.og_image, url);
 
   // 분석 결과를 캐시에 저장 (6시간 동안 같은 URL 재분석 시 재사용)
   setCachedResult(url, validated);
