@@ -36,6 +36,8 @@ const DEFAULT_POPUP_SCALE_PERCENT = 100;
 let form;          // <form id="options-form"> — API 키 입력 폼 전체
 let apiKeyInput;   // <input id="api-key"> — API 키를 직접 입력하는 텍스트 박스
 let cerebrasApiKeyInput;
+let firebaseProjectIdInput;
+let firebaseApiKeyInput;
 let clearButton;   // <button id="clear-key"> — "삭제" 버튼
 let statusElement; // <p id="status"> — "저장되었습니다" 등 결과 메시지를 보여주는 단락
 
@@ -54,6 +56,8 @@ document.addEventListener("DOMContentLoaded", () => {
   form          = document.getElementById("options-form");
   apiKeyInput   = document.getElementById("api-key");
   cerebrasApiKeyInput = document.getElementById("cerebras-api-key");
+  firebaseProjectIdInput = document.getElementById("firebase-project-id");
+  firebaseApiKeyInput    = document.getElementById("firebase-api-key");
   clearButton   = document.getElementById("clear-key");
   statusElement = document.getElementById("status");
 
@@ -87,7 +91,9 @@ document.addEventListener("DOMContentLoaded", () => {
     해당 키가 없으면 items.groqApiKey는 undefined가 됩니다.
 */
 function loadSavedKey() {
-  chrome.storage.local.get(["groqApiKey", "groqApiKeys", "cerebrasApiKeys"], (items) => {
+  chrome.storage.local.get(
+    ["groqApiKey", "groqApiKeys", "cerebrasApiKeys", "firebaseProjectId", "firebaseApiKey"],
+    (items) => {
     // typeof items.groqApiKey === "string": 값이 실제 문자열인지 확인
     // items.groqApiKey가 빈 문자열("")인 경우는 표시할 필요가 없으므로 &&로 추가 확인
     const keys = Array.isArray(items.groqApiKeys)
@@ -107,6 +113,13 @@ function loadSavedKey() {
       : [];
     if (cerebrasKeys.length) {
       cerebrasApiKeyInput.value = cerebrasKeys.join("\n");
+    }
+
+    if (typeof items.firebaseProjectId === "string") {
+      firebaseProjectIdInput.value = items.firebaseProjectId;
+    }
+    if (typeof items.firebaseApiKey === "string") {
+      firebaseApiKeyInput.value = items.firebaseApiKey;
     }
 
     if (savedKeys.length || cerebrasKeys.length) {
@@ -135,6 +148,8 @@ function saveApiKey(event) {
   // .trim(): 실수로 앞뒤에 공백을 넣었을 때 자동으로 제거
   const apiKeys = parseApiKeys(apiKeyInput.value);
   const cerebrasApiKeys = parseApiKeys(cerebrasApiKeyInput.value);
+  const firebaseProjectId = firebaseProjectIdInput.value.trim();
+  const firebaseApiKey = firebaseApiKeyInput.value.trim();
 
   // 빈 값이면 저장하지 않고 오류 메시지 표시
   if (!apiKeys.length && !cerebrasApiKeys.length) {
@@ -146,17 +161,22 @@ function saveApiKey(event) {
     chrome.storage.local.set({ 키: 값 }, 콜백):
     저장소에 데이터를 저장합니다. 저장이 완료되면 콜백이 호출됩니다.
     여기서 저장한 값을 background.js의 getGroqApiKey()가 나중에 읽어서 사용합니다.
+    firebaseProjectId/firebaseApiKey는 background.js의 getFirebaseConfig()가 읽습니다.
+    둘 중 하나라도 비어 있으면 Firebase 기능은 자동으로 꺼진 상태로 동작합니다.
   */
   chrome.storage.local.set({
     groqApiKeys: apiKeys,
     groqApiKey: apiKeys[0] || "",
     cerebrasApiKeys,
     groqActiveKeyIndex: 0,
-    aiActiveCredentialIndex: 0
+    aiActiveCredentialIndex: 0,
+    firebaseProjectId,
+    firebaseApiKey
   }, () => {
     apiKeyInput.value = apiKeys.join("\n");
     cerebrasApiKeyInput.value = cerebrasApiKeys.join("\n");
-    setStatus(`API Key를 Groq ${apiKeys.length}개, Cerebras ${cerebrasApiKeys.length}개 저장했습니다.`); // 저장 완료 메시지
+    const firebaseNote = firebaseProjectId && firebaseApiKey ? ", Firebase 연동 켜짐" : "";
+    setStatus(`API Key를 Groq ${apiKeys.length}개, Cerebras ${cerebrasApiKeys.length}개 저장했습니다${firebaseNote}.`); // 저장 완료 메시지
   });
 }
 
@@ -174,11 +194,16 @@ function saveApiKey(event) {
     삭제가 완료되면 콜백이 호출됩니다.
 */
 function clearApiKey() {
-  chrome.storage.local.remove(["groqApiKey", "groqApiKeys", "cerebrasApiKeys", "groqActiveKeyIndex", "aiActiveCredentialIndex"], () => {
-    apiKeyInput.value = ""; // 입력칸 비우기
-    cerebrasApiKeyInput.value = "";
-    setStatus("API Key를 삭제했습니다.");
-  });
+  chrome.storage.local.remove(
+    ["groqApiKey", "groqApiKeys", "cerebrasApiKeys", "groqActiveKeyIndex", "aiActiveCredentialIndex", "firebaseProjectId", "firebaseApiKey"],
+    () => {
+      apiKeyInput.value = ""; // 입력칸 비우기
+      cerebrasApiKeyInput.value = "";
+      firebaseProjectIdInput.value = "";
+      firebaseApiKeyInput.value = "";
+      setStatus("API Key와 Firebase 설정을 삭제했습니다.");
+    }
+  );
 }
 
 function parseApiKeys(value) {
