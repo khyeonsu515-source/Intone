@@ -66,6 +66,24 @@ async function requestNewsSitePattern(credentials, payload) {
   ]);
 }
 
+/*
+  requestTopicCategory: 새 topic이 처음 생성될 때 한 번만 호출해서,
+  고정된 대분류(정치/경제/사회/...) 중 하나를 AI에게 물어봅니다.
+  indexArticleTopic()이 새 topics 문서를 만들 때만 호출합니다.
+*/
+async function requestTopicCategory(credentials, payload) {
+  return requestGroqJson(credentials, [
+    {
+      role: "system",
+      content: buildTopicCategoryPrompt()
+    },
+    {
+      role: "user",
+      content: JSON.stringify(payload, null, 2)
+    }
+  ]);
+}
+
 
 // ─────────────────────────────────────────────
 // Groq AI API를 실제로 호출하고 응답을 JSON으로 반환하는 함수

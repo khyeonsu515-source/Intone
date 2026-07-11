@@ -426,14 +426,17 @@ async function linkKeywordToTopic(keyword, topicId) {
     ① 이 기사의 core_keywords 각각으로 keywordIndex를 조회해서, 이미 연결된
        topicId 후보들을 모은다.
     ② 후보 주제들 중 topic 라벨이 이 기사의 topic과 정확히 같은 게 있으면
-       "같은 사건"으로 보고 그 주제에 기사를 추가한다.
+       "같은 사건"으로 보고 그 주제에 기사를 추가한다. 이때 category는
+       재분류하지 않고 최초 생성 시 정해진 값을 그대로 유지한다.
     ③ 정확히 같은 라벨이 없으면(키워드는 겹쳤지만 다른 사건이거나, 아예
-       겹치는 키워드가 없으면) 새 주제를 만든다.
+       겹치는 키워드가 없으면) 새 주제를 만든다. 이때만 requestTopicCategory()로
+       고정 대분류(정치/경제/사회/...)를 한 번 물어봐서 topics 문서에 같이 저장한다
+       — 대분류는 사건 자체의 속성이라 기사가 늘어나도 바뀌지 않기 때문이다.
     ④ 이 기사의 키워드들을 모두 최종 topicId에 연결한다 — 기존 키워드인데
        이 topicId가 아직 없으면 추가되므로, "같은 키워드, 다른 주제" 상황도
        자연히 그 키워드 아래에 주제가 하나 더 늘어나는 식으로 처리된다.
 */
-async function indexArticleTopic(url, validated) {
+async function indexArticleTopic(url, validated, credentials) {
   const config = await getFirebaseConfig();
   const topic = typeof validated?.topic === "string" ? validated.topic.trim() : "";
   const keywords = Array.isArray(validated?.core_keywords)
@@ -458,23 +461,26 @@ async function indexArticleTopic(url, validated) {
 
     let topicId;
     if (matched) {
-      // 같은 사건 → 기존 주제에 기사 추가
+      // 같은 사건 → 기존 주제에 기사 추가 (category는 최초 생성 시 값을 그대로 유지)
       topicId = matched.id;
       const articleUrls = Array.isArray(matched.articleUrls) ? matched.articleUrls : [];
       const mergedKeywords = Array.from(new Set([...(matched.keywords || []), ...keywords]));
       await saveTopicDoc(topicId, {
         topic: matched.topic,
         keywords: mergedKeywords,
+        category: TOPIC_CATEGORY_VALUES.includes(matched.category) ? matched.category : "기타",
         articleUrls: articleUrls.includes(url) ? articleUrls : [...articleUrls, url],
         createdAt: typeof matched.createdAt === "number" ? matched.createdAt : Date.now(),
         updatedAt: Date.now()
       });
     } else {
-      // ③ 새 사건 → 새 주제 생성
+      // ③ 새 사건 → 새 주제 생성, 이때만 고정 대분류(category)를 AI에게 물어봄
       topicId = crypto.randomUUID();
+      const categoryResult = await requestTopicCategory(credentials, { topic, keywords }).catch(() => null);
       await saveTopicDoc(topicId, {
         topic,
         keywords,
+        category: validateTopicCategory(categoryResult),
         articleUrls: [url],
         createdAt: Date.now(),
         updatedAt: Date.now()

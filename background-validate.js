@@ -6,6 +6,10 @@
 // 그 스펙트럼 위치를 나타냅니다. AI가 이 중 하나를 반환하지 않으면 "중립적"으로 대체합니다.
 const ANALYSIS_STANCE_VALUES = ["매우 부정적", "약간 부정적", "중립적", "약간 긍정적", "매우 긍정적"];
 
+// topics.category에 허용되는 고정 대분류 목록. 새 topic이 생성될 때 한 번만
+// 매겨지고 이후 안 바뀝니다. AI가 이 중 하나를 반환하지 않으면 "기타"로 대체합니다.
+const TOPIC_CATEGORY_VALUES = ["정치", "경제", "사회", "국제", "문화", "과학기술", "스포츠", "연예", "기타"];
+
 /*
   sanitizeKeywordList: topic/core_keywords/framing_keywords처럼 문자열 배열로
   와야 하는 값을 검증합니다. 배열이 아니거나 항목이 문자열이 아니면 제외하고,
@@ -32,6 +36,14 @@ function validateDirection(value) {
     stance,
     reason: sanitizeText(value?.reason || "", 200)
   };
+}
+
+/*
+  validateTopicCategory: requestTopicCategory()의 응답을 검증합니다.
+  값이 허용 목록에 없으면(AI가 새 이름을 지어냈거나 호출 자체가 실패했으면) "기타"로 대체합니다.
+*/
+function validateTopicCategory(value) {
+  return TOPIC_CATEGORY_VALUES.includes(value?.category) ? value.category : "기타";
 }
 
 /*

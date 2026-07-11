@@ -262,7 +262,8 @@ async function handleAnalyzeRequest(payload, sender) {
   setCachedResult(url, validated);
   setFirestoreCachedResult(url, validated); // Firebase에도 공유(실패해도 무시)
   // 키워드/주제 색인에도 등록 — 같은 사건 기사끼리 묶기 위함(실패해도 무시)
-  indexArticleTopic(url, validated).catch(() => {});
+  // credentials를 같이 넘겨서, 새 topic이 생성될 때만 대분류(category)를 AI에게 물어볼 수 있게 함
+  indexArticleTopic(url, validated, credentials).catch(() => {});
 
   // 최종 완료 상태 표시
   updateStatus({
