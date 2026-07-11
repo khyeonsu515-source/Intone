@@ -39,7 +39,7 @@ const UNKNOWN_NEWS_DELAY_MS = 4000;
 // AI에게 넘기는 링크 텍스트의 최대 길이 (토큰 절약용)
 const MAX_LINK_TEXT_LENGTH = 300;
 
-const POPUP_INTERACTION_GRACE_MS = 1500;
+const POPUP_INTERACTION_GRACE_MS = 2000;
 
 // 팝업 밖으로 나가는 즉시 닫힘 모션을 시작합니다.
 const POPUP_CLOSE_DELAY_MS = 0;
