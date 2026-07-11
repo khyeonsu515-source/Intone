@@ -4,20 +4,21 @@
 
 /*
   getFirebaseConfig: options.html에서 저장한 Firebase 프로젝트 ID와 웹 API Key를
-  읽어옵니다. 둘 중 하나라도 비어 있으면 Firebase 기능을 쓰지 않는 것으로 보고
-  null을 반환합니다 (설정하지 않은 사용자는 기존처럼 로컬 캐시만 사용).
+  읽어옵니다. 저장된 값이 없으면 코드에 내장된 기본값(FIREBASE_DEFAULT_PROJECT_ID,
+  FIREBASE_DEFAULT_API_KEY)을 사용합니다 — 즉 사용자가 아무것도 설정하지 않아도
+  이 확장 프로그램은 항상 Firebase 공유 캐시를 사용합니다.
 */
 async function getFirebaseConfig() {
   return new Promise((resolve) => {
     chrome.storage.local.get(
       [FIREBASE_PROJECT_ID_STORAGE_KEY, FIREBASE_API_KEY_STORAGE_KEY],
       (items) => {
-        const projectId = typeof items[FIREBASE_PROJECT_ID_STORAGE_KEY] === "string"
+        const projectId = (typeof items[FIREBASE_PROJECT_ID_STORAGE_KEY] === "string"
           ? items[FIREBASE_PROJECT_ID_STORAGE_KEY].trim()
-          : "";
-        const apiKey = typeof items[FIREBASE_API_KEY_STORAGE_KEY] === "string"
+          : "") || FIREBASE_DEFAULT_PROJECT_ID;
+        const apiKey = (typeof items[FIREBASE_API_KEY_STORAGE_KEY] === "string"
           ? items[FIREBASE_API_KEY_STORAGE_KEY].trim()
-          : "";
+          : "") || FIREBASE_DEFAULT_API_KEY;
         resolve(projectId && apiKey ? { projectId, apiKey } : null);
       }
     );

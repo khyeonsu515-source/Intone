@@ -22,9 +22,13 @@ const STATUS_STORAGE_KEY = "currentAnalysisStatus";
 const ANALYSIS_CACHE_STORAGE_KEY = "intoneAnalysisCache";
 const ANALYSIS_CACHE_MAX_ENTRIES = 160;
 
-// Firebase(Firestore) 설정은 options.html에서 저장합니다. 둘 다 있어야 사용합니다.
+// Firebase(Firestore) 설정은 options.html에서 저장한 값을 우선 사용하고,
+// 저장된 값이 없으면 아래 기본값을 사용합니다. 즉, 사용자가 직접 설정하지
+// 않아도 이 확장 프로그램은 항상 이 Firebase 프로젝트를 공유 캐시로 씁니다.
 const FIREBASE_PROJECT_ID_STORAGE_KEY = "firebaseProjectId";
 const FIREBASE_API_KEY_STORAGE_KEY = "firebaseApiKey";
+const FIREBASE_DEFAULT_PROJECT_ID = "intone-analysis";
+const FIREBASE_DEFAULT_API_KEY = "AIzaSyBQT-UNNgB5Ujlkw_RFsPNsfKfj0jIXQnY";
 const FIRESTORE_COLLECTION = "analysisResults";
 
 // Firestore는 여러 사용자가 함께 쓰는 공유 캐시라서 로컬 캐시(6시간)보다 오래 유지합니다.
