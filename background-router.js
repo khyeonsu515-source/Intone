@@ -237,11 +237,7 @@ async function handleAnalyzeRequest(payload, sender) {
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
   const validated = validateAnalysis(analysis);
   // 대표 이미지는 AI 분석과 무관하게 페이지에서 그대로 뽑아온 값이라 별도로 붙입니다.
-  // og-image 서버(open-graph-scraper, og:image 없으면 페이지 첫 이미지까지 찾아줌)를
-  // 먼저 시도하고, 서버가 아직 없거나 실패하면 이 확장이 직접 정규식으로 뽑은
-  // og:image로 대체합니다.
-  const serverImage = await fetchImageFromServer(url);
-  validated.image_url = serverImage || resolveImageUrl(extracted.og_image, url);
+  validated.image_url = resolveImageUrl(extracted.og_image, url);
 
   // 분석 결과를 캐시에 저장 (6시간 동안 같은 URL 재분석 시 재사용)
   setCachedResult(url, validated);

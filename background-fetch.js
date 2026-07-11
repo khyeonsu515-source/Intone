@@ -11,7 +11,7 @@
     page_title       - <title> 태그 내용
     meta_description - <meta name="description"> 내용
     og_title         - <meta property="og:title"> 내용 (SNS 공유용 제목)
-    og_image         - <meta property="og:image"> 내용 (기사 대표 이미지 URL)
+    og_image         - <meta property="og:image"> 내용, 없으면 페이지의 첫 <img> src (기사 대표 이미지 URL)
     article_text     - <p> 태그들에서 추출한 본문 텍스트
     extraction_error - 추출 중 오류가 발생했을 때의 오류 메시지
 */
@@ -42,7 +42,7 @@ async function fetchArticlePreview(url) {
       page_title:       extractTitle(html),
       meta_description: extractMetaContent(html, "name", "description"),
       og_title:         extractMetaContent(html, "property", "og:title"),
-      og_image:         extractMetaContent(html, "property", "og:image"),
+      og_image:         extractMetaContent(html, "property", "og:image") || extractFirstImage(html),
       article_text:     extractArticleText(html),
       extraction_error: ""
     };

@@ -1,9 +1,0 @@
-{
-  "name": "intone-og-image-server",
-  "version": "1.0.0",
-  "private": true,
-  "description": "기사 URL을 받아 open-graph-scraper로 대표 이미지를 찾아주는 작은 서버리스 함수. open-graph-scraper는 undici/Buffer 등 Node 전용 API에 의존해서 브라우저나 크롬 확장 서비스워커 안에서는 번들링해도 돌릴 수 없어, Node 런타임이 있는 별도 서버(Vercel)에 올려두고 확장이 이 서버만 호출하는 구조로 뺐습니다.",
-  "dependencies": {
-    "open-graph-scraper": "^6.12.0"
-  }
-}

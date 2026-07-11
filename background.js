@@ -38,7 +38,6 @@
     9. background-learning.js - 뉴스 사이트 학습, API 키 자격 증명 관리
     10. background-utils.js   - 점수 계산, URL 정규화, 로컬 캐시, 문자열 유틸
     11. background-firebase.js - Firebase(Firestore) 공유 캐시
-    12. background-image-server.js - 대표 이미지 조회용 별도 서버 호출 (server/ 참고)
 
   =====================================================================
 */
@@ -59,8 +58,7 @@ importScripts(
   "background-parse.js",
   "background-learning.js",
   "background-utils.js",
-  "background-firebase.js",
-  "background-image-server.js"
+  "background-firebase.js"
 );
 
 try {
