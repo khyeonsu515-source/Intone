@@ -255,8 +255,11 @@ async function handleAnalyzeRequest(payload, sender) {
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
   // (resolvedTopic이 있으면 topic/core_keywords는 AI 응답 대신 이 값을 그대로 씀)
   const validated = validateAnalysis(analysis, matchedTopic);
-  // 대표 이미지는 AI 분석과 무관하게 페이지에서 그대로 뽑아온 값이라 별도로 붙입니다.
+  // 대표 이미지와 실제 기사 제목은 AI 분석과 무관하게 페이지에서 그대로 뽑아온
+  // 값이라 별도로 붙입니다. 제목은 og:title(SNS 공유용이라 보통 사이트명 접미사
+  // 없이 깔끔함)을 우선 쓰고, 없으면 <title> 태그 값을 씁니다.
   validated.image_url = resolveImageUrl(extracted.og_image, url);
+  validated.article_title = sanitizeText(extracted.og_title || extracted.page_title || "", 200);
 
   // 분석 결과를 캐시에 저장 (6시간 동안 같은 URL 재분석 시 재사용)
   setCachedResult(url, validated);
