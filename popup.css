@@ -1403,11 +1403,11 @@
      처음 30~40ms 안에 끝내버려서 "순간 팝"처럼 보이고 늘어나거나
      줄어드는 모션이 거의 안 보였습니다. */
   transition:
-    max-height 850ms cubic-bezier(.4, 0, .2, 1),
-    opacity 450ms ease,
-    transform 850ms cubic-bezier(.4, 0, .2, 1),
-    padding 450ms ease,
-    border-width 450ms ease !important;
+    max-height 280ms cubic-bezier(.4, 0, .2, 1),
+    opacity 200ms ease,
+    transform 280ms cubic-bezier(.4, 0, .2, 1),
+    padding 200ms ease,
+    border-width 200ms ease !important;
 }
 
 @keyframes inton-popup-flicker-safe-in {
