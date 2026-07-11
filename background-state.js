@@ -34,6 +34,10 @@ const FIRESTORE_COLLECTION = "analysisResults";
 // Firestore는 여러 사용자가 함께 쓰는 공유 캐시라서 로컬 캐시(6시간)보다 오래 유지합니다.
 const FIRESTORE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7일
 
+// 새 기사를 분석하기 전에 "이미 같은 사건을 다룬 기사가 있는지" AI에게 참고시킬
+// 기존 topic/core_keywords 후보를 Firestore에서 몇 개까지 가져올지.
+const TOPIC_CANDIDATE_LIMIT = 40;
+
 const AI_ACTIVE_CREDENTIAL_INDEX_STORAGE_KEY = "aiActiveCredentialIndex";
 
 const LEARNED_NEWS_PATTERNS_STORAGE_KEY = "learnedNewsUrlPrefixes";

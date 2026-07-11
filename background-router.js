@@ -233,7 +233,11 @@ async function handleAnalyzeRequest(payload, sender) {
     await learnNewsPatternFromConfirmedArticle(credentials, analysisInput).catch(() => {});
   }
 
-  const analysis  = await requestGroqAnalysis(credentials, analysisInput);
+  // 같은 사건을 다룬 기사끼리 topic/keywords가 겹치도록, 이미 저장된 주제
+  // 목록을 먼저 가져와서 AI에게 참고자료로 넘깁니다. 실패해도(빈 배열이어도)
+  // 분석 자체는 평소대로 진행됩니다.
+  const existingTopics = await getRecentTopicCandidates().catch(() => []);
+  const analysis  = await requestGroqAnalysis(credentials, analysisInput, existingTopics);
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
   const validated = validateAnalysis(analysis);
 

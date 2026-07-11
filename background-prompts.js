@@ -53,7 +53,29 @@ function buildNewsSitePatternPrompt() {
 `.trim();
 }
 
-function buildAnalysisPrompt() {
+/*
+  buildAnalysisPrompt: existingTopics가 주어지면, "이미 데이터베이스에 있는
+  주제 목록이니 같은 사건이면 그대로 재사용하라"는 지시와 함께 프롬프트 끝에
+  덧붙입니다. 기사마다 독립적으로 키워드를 새로 지어내면 같은 사건이어도
+  문자열이 겹치지 않는 문제가 있어서, 기존 목록을 참고자료로 주고 "새로
+  만들지 말고 골라 써라"라고 유도하기 위한 것입니다.
+*/
+function buildAnalysisPrompt(existingTopics = []) {
+  const topicList = Array.isArray(existingTopics) ? existingTopics.filter((item) => item?.topic) : [];
+
+  const existingTopicsSection = topicList.length
+    ? `
+[기존 주제 목록 — 데이터베이스에 이미 저장된 사건/이슈들이다]
+아래 목록 중 이 기사와 "같은 사건/이슈"를 다루는 항목이 있으면, topic과
+core_keywords를 항목에 있는 값 그대로 재사용해라(띄어쓰기 하나까지 똑같이,
+새로 짓지 마라). 같은 사건이 아니면 새로 만들어라. 목록:
+${JSON.stringify(topicList, null, 2)}
+`
+    : `
+[기존 주제 목록]
+아직 저장된 주제가 없다. topic/core_keywords를 새로 만들어라.
+`;
+
   return `
 너는 뉴스 링크의 신뢰도와 어그로도를 평가하는 분석기다.
 이미 뉴스 기사로 판별된 링크만 입력된다.
@@ -99,7 +121,7 @@ article_summary는 기사 내용을 1문장으로 짧게 요약해라.
 - direction: 기사의 관점을 나타내는 객체
   · stance: "긍정적" | "부정적" | "중립적" | "비판적" | "옹호적" 중 하나
   · reason: 왜 그 관점(stance)으로 판단했는지 1~2문장 (summary/article_summary와 겹치지 않게, 논조 판단 근거만 적는다)
-
+${existingTopicsSection}
 아래 형식과 키를 그대로 사용해라.
 {
   "is_article": true,

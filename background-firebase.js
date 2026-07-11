@@ -203,6 +203,65 @@ async function getSharedCachedResult(url) {
 }
 
 /*
+  getRecentTopicCandidates: 최근 저장된 기사들의 topic/core_keywords만 모아서
+  반환합니다. 새 기사를 분석하기 전에 이 목록을 AI에게 참고자료로 보여주고
+  "같은 사건이면 이 topic/keywords를 그대로 재사용해라"라고 지시하기 위한 것으로,
+  기사마다 따로따로 키워드를 지어내서 같은 사건인데도 문자열이 겹치지 않는
+  문제를 줄이기 위한 용도입니다. 실패하면 빈 배열을 반환해서 분석 자체는
+  평소대로(참고 목록 없이) 진행되게 합니다.
+*/
+async function getRecentTopicCandidates(maxCount = TOPIC_CANDIDATE_LIMIT) {
+  const config = await getFirebaseConfig();
+  if (!config) {
+    return [];
+  }
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents:runQuery?key=${config.apiKey}`;
+    const body = JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: FIRESTORE_COLLECTION }],
+        orderBy: [{ field: { fieldPath: "savedAt" }, direction: "DESCENDING" }],
+        limit: maxCount
+      }
+    });
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body
+    });
+
+    if (!response.ok) {
+      console.warn("[Intone/Firestore] 주제 목록 조회 실패", response.status, await response.text());
+      return [];
+    }
+
+    const rows = await response.json();
+    const seenTopics = new Set();
+    const topics = [];
+
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const record = row?.document?.fields ? firestoreFieldsToObject(row.document.fields) : null;
+      const topic = typeof record?.topic === "string" ? record.topic.trim() : "";
+      if (!record?.is_article || !topic || seenTopics.has(topic)) {
+        continue;
+      }
+      seenTopics.add(topic);
+      topics.push({
+        topic,
+        core_keywords: Array.isArray(record.core_keywords) ? record.core_keywords : []
+      });
+    }
+
+    return topics;
+  } catch (error) {
+    console.warn("[Intone/Firestore] 주제 목록 조회 오류", error);
+    return [];
+  }
+}
+
+/*
   describeFirestoreError: Firestore REST 응답의 HTTP 상태 코드를 사람이 읽을 수
   있는 원인/해결 방법 설명으로 바꿉니다. 옵션 페이지의 "연결 테스트" 결과나
   콘솔 로그에서 무엇이 잘못됐는지 바로 알 수 있게 하기 위한 것입니다.
