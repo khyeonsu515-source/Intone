@@ -172,6 +172,10 @@
       <label for="firebase-api-key">Firebase 웹 API Key</label>
       <input id="firebase-api-key" name="firebase-api-key" type="text" autocomplete="off" placeholder="AIzaSy..." spellcheck="false">
       <p>둘 다 입력하면 분석 전에 같은 URL이 Firebase에 이미 분석되어 있는지 먼저 확인하고, 새로 분석한 결과도 Firebase에 함께 저장해 다른 곳에서도 재사용합니다. 비워두면 이 브라우저 안의 캐시만 사용합니다.</p>
+      <div class="actions">
+        <button id="test-firebase" type="button">Firebase 연결 테스트</button>
+      </div>
+      <p id="firebase-test-status" role="status" aria-live="polite"></p>
 
       <div class="actions">
         <button type="submit">저장</button>

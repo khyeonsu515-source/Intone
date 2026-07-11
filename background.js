@@ -172,6 +172,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // options.html의 "연결 테스트" 버튼이 보내는 메시지: Firestore에 테스트 문서를
+  // 쓰고 읽어서 실제로 저장이 되는지 바로 확인합니다.
+  if (message?.type === "TEST_FIREBASE_CONNECTION") {
+    testFirebaseConnection(message.payload).then((result) => sendResponse(result));
+    return true;
+  }
+
   if (message?.type !== "ANALYZE_NEWS_LINK") {
     return false;
   }
@@ -1501,6 +1508,7 @@ async function getFirestoreCachedResult(url) {
       return null; // 아직 아무도 이 URL을 분석한 적 없음
     }
     if (!response.ok) {
+      console.warn("[Intone/Firestore] 읽기 실패", response.status, await response.text());
       return null;
     }
 
@@ -1514,10 +1522,13 @@ async function getFirestoreCachedResult(url) {
       return null; // 오래된 기록은 새로 분석하도록 무시
     }
 
+    console.info("[Intone/Firestore] 기존 기록 사용", url);
+
     // url/savedAt은 저장용 메타 정보이므로 content.js에 돌려줄 결과에서는 제외합니다.
     const { url: _url, savedAt: _savedAt, ...result } = record;
     return result;
   } catch (error) {
+    console.warn("[Intone/Firestore] 읽기 오류", error);
     return null;
   }
 }
@@ -1544,13 +1555,21 @@ async function setFirestoreCachedResult(url, data) {
       })
     });
 
-    await fetch(endpoint, {
+    const response = await fetch(endpoint, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body
     });
+
+    if (!response.ok) {
+      console.warn("[Intone/Firestore] 쓰기 실패", response.status, await response.text());
+      return;
+    }
+
+    console.info("[Intone/Firestore] 저장 완료", url);
   } catch (error) {
     // 네트워크 오류 등은 무시합니다. 로컬 캐시에는 이미 저장되어 있습니다.
+    console.warn("[Intone/Firestore] 쓰기 오류", error);
   }
 }
 
@@ -1572,6 +1591,119 @@ async function getSharedCachedResult(url) {
   }
 
   return null;
+}
+
+/*
+  describeFirestoreError: Firestore REST 응답의 HTTP 상태 코드를 사람이 읽을 수
+  있는 원인/해결 방법 설명으로 바꿉니다. 옵션 페이지의 "연결 테스트" 결과나
+  콘솔 로그에서 무엇이 잘못됐는지 바로 알 수 있게 하기 위한 것입니다.
+*/
+function describeFirestoreError(status, bodyText) {
+  if (status === 403) {
+    return "권한 거부(403) — Firestore 보안 규칙(규칙 탭)이 올바르게 게시됐는지 확인하세요.";
+  }
+  if (status === 404) {
+    return "찾을 수 없음(404) — 프로젝트 ID가 정확한지, Firestore Database를 만들었는지 확인하세요.";
+  }
+  if (status === 400) {
+    return `잘못된 요청(400) — 웹 API Key가 정확한지 확인하세요. (${truncate(bodyText, 200)})`;
+  }
+  return `HTTP ${status} 오류 (${truncate(bodyText, 200)})`;
+}
+
+/*
+  testFirebaseConnection: options.html의 "연결 테스트" 버튼에서 호출됩니다.
+  실제 분석 흐름과 똑같이 Firestore에 테스트 문서를 하나 쓰고, 다시 읽어서
+  방금 쓴 값과 일치하는지 확인합니다. 이렇게 하면 "저장은 되는데 규칙 때문에
+  못 읽는" 것처럼 쓰기/읽기 중 한쪽만 실패하는 경우도 구분해서 알려줄 수 있습니다.
+  테스트가 끝나면 문서는 그대로 두지 않고 지우려고 시도합니다(실패해도 무시).
+
+  overrideConfig가 주어지면(옵션 페이지에 방금 입력했지만 아직 저장 버튼을
+  누르지 않은 값) 그 값을 우선 사용하고, 없으면 저장된 설정을 읽습니다.
+*/
+async function testFirebaseConnection(overrideConfig) {
+  const overrideProjectId = typeof overrideConfig?.projectId === "string" ? overrideConfig.projectId.trim() : "";
+  const overrideApiKey = typeof overrideConfig?.apiKey === "string" ? overrideConfig.apiKey.trim() : "";
+  const config = overrideProjectId && overrideApiKey
+    ? { projectId: overrideProjectId, apiKey: overrideApiKey }
+    : await getFirebaseConfig();
+  if (!config) {
+    return { ok: false, step: "config", error: "Firebase 프로젝트 ID와 웹 API Key를 먼저 저장하세요." };
+  }
+
+  const testUrl = `https://intone-connection-test.local/${Date.now()}`;
+  const testRecord = {
+    is_article: true,
+    credibility_score: 1,
+    clickbait_score: 1,
+    credibility_breakdown: { source_clarity: 1, title_body_match: 0, evidence_quality: 0, neutrality: 0, context: 0 },
+    clickbait_breakdown: { exaggeration: 1, curiosity_gap: 0, title_body_mismatch: 0, emotional_trigger: 0, hidden_key_info: 0 },
+    article_summary: "Intone 연결 테스트 문서",
+    summary: "Intone 연결 테스트 문서",
+    warning: "이 문서는 연결 테스트로 자동 생성되었으며 곧 삭제됩니다."
+  };
+
+  let docId;
+  let endpoint;
+
+  try {
+    docId = await hashUrlForFirestoreId(testUrl);
+    endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${FIRESTORE_COLLECTION}/${docId}?key=${config.apiKey}`;
+  } catch (error) {
+    return { ok: false, step: "setup", error: error.message || String(error) };
+  }
+
+  // ① 쓰기 테스트
+  let writeMs;
+  try {
+    const writeStart = Date.now();
+    const writeResponse = await fetch(endpoint, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fields: objectToFirestoreFields({ url: testUrl, savedAt: Date.now(), ...testRecord })
+      })
+    });
+    writeMs = Date.now() - writeStart;
+
+    if (!writeResponse.ok) {
+      const bodyText = await writeResponse.text();
+      return { ok: false, step: "write", status: writeResponse.status, error: describeFirestoreError(writeResponse.status, bodyText) };
+    }
+  } catch (error) {
+    return { ok: false, step: "write", error: `네트워크 오류: ${error.message || error}` };
+  }
+
+  // ② 읽기 테스트 — 방금 쓴 문서를 다시 읽어서 값이 그대로인지 확인
+  let readMs;
+  let record;
+  try {
+    const readStart = Date.now();
+    const readResponse = await fetch(endpoint, { method: "GET" });
+    readMs = Date.now() - readStart;
+
+    if (!readResponse.ok) {
+      const bodyText = await readResponse.text();
+      return { ok: false, step: "read", status: readResponse.status, error: describeFirestoreError(readResponse.status, bodyText) };
+    }
+
+    const doc = await readResponse.json();
+    record = firestoreFieldsToObject(doc.fields);
+  } catch (error) {
+    return { ok: false, step: "read", error: `네트워크 오류: ${error.message || error}` };
+  }
+
+  // ③ 테스트 문서 정리 (실패해도 결과에는 영향 없음)
+  fetch(endpoint, { method: "DELETE" }).catch(() => {});
+
+  const matches = record?.credibility_score === testRecord.credibility_score
+    && record?.summary === testRecord.summary;
+
+  if (!matches) {
+    return { ok: false, step: "verify", error: "저장한 값과 다시 읽은 값이 일치하지 않습니다." };
+  }
+
+  return { ok: true, writeMs, readMs, projectId: config.projectId };
 }
 
 /*

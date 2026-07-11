@@ -38,6 +38,8 @@ let apiKeyInput;   // <input id="api-key"> — API 키를 직접 입력하는 �
 let cerebrasApiKeyInput;
 let firebaseProjectIdInput;
 let firebaseApiKeyInput;
+let testFirebaseButton;   // <button id="test-firebase"> — "Firebase 연결 테스트" 버튼
+let firebaseTestStatusElement; // <p id="firebase-test-status"> — 연결 테스트 결과 메시지
 let clearButton;   // <button id="clear-key"> — "삭제" 버튼
 let statusElement; // <p id="status"> — "저장되었습니다" 등 결과 메시지를 보여주는 단락
 
@@ -58,6 +60,8 @@ document.addEventListener("DOMContentLoaded", () => {
   cerebrasApiKeyInput = document.getElementById("cerebras-api-key");
   firebaseProjectIdInput = document.getElementById("firebase-project-id");
   firebaseApiKeyInput    = document.getElementById("firebase-api-key");
+  testFirebaseButton         = document.getElementById("test-firebase");
+  firebaseTestStatusElement  = document.getElementById("firebase-test-status");
   clearButton   = document.getElementById("clear-key");
   statusElement = document.getElementById("status");
 
@@ -71,6 +75,7 @@ document.addEventListener("DOMContentLoaded", () => {
   */
   form.addEventListener("submit", saveApiKey);
   clearButton.addEventListener("click", clearApiKey);
+  testFirebaseButton.addEventListener("click", runFirebaseConnectionTest);
 
   // 페이지가 열리자마자 이미 저장된 키가 있으면 입력칸에 채워줌
   loadSavedKey();
@@ -204,6 +209,62 @@ function clearApiKey() {
       setStatus("API Key와 Firebase 설정을 삭제했습니다.");
     }
   );
+}
+
+
+// ─────────────────────────────────────────────
+// Firebase 연결 테스트
+// ─────────────────────────────────────────────
+
+/*
+  runFirebaseConnectionTest: "Firebase 연결 테스트" 버튼을 눌렀을 때 호출됩니다.
+  입력칸에 있는 값(아직 "저장"을 누르지 않았어도 됨)을 background.js에 보내서,
+  실제로 Firestore에 테스트 문서를 쓰고 다시 읽어보게 합니다.
+  background.js의 testFirebaseConnection()이 실제 작업을 수행합니다.
+*/
+function runFirebaseConnectionTest() {
+  const projectId = firebaseProjectIdInput.value.trim();
+  const apiKey = firebaseApiKeyInput.value.trim();
+
+  if (!projectId || !apiKey) {
+    setFirebaseTestStatus("Firebase 프로젝트 ID와 웹 API Key를 먼저 입력하세요.", true);
+    return;
+  }
+
+  testFirebaseButton.disabled = true;
+  setFirebaseTestStatus("연결 테스트 중...");
+
+  chrome.runtime.sendMessage(
+    { type: "TEST_FIREBASE_CONNECTION", payload: { projectId, apiKey } },
+    (result) => {
+      testFirebaseButton.disabled = false;
+
+      if (chrome.runtime.lastError) {
+        setFirebaseTestStatus(`확장 프로그램과 통신하지 못했습니다: ${chrome.runtime.lastError.message}`, true);
+        return;
+      }
+
+      if (result?.ok) {
+        setFirebaseTestStatus(`연결 성공 — 쓰기 ${result.writeMs}ms, 읽기 ${result.readMs}ms (프로젝트: ${result.projectId})`);
+        return;
+      }
+
+      const stepLabel = {
+        config: "설정",
+        setup: "준비",
+        write: "쓰기",
+        read: "읽기",
+        verify: "검증"
+      }[result?.step] || "테스트";
+
+      setFirebaseTestStatus(`${stepLabel} 실패 — ${result?.error || "알 수 없는 오류입니다."}`, true);
+    }
+  );
+}
+
+function setFirebaseTestStatus(message, isError = false) {
+  firebaseTestStatusElement.textContent = message;
+  firebaseTestStatusElement.style.color = isError ? "#a43131" : "#12633d";
 }
 
 function parseApiKeys(value) {
