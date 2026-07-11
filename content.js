@@ -955,8 +955,9 @@ function inferPopupStateFromClasses() {
 
 /*
   markPopupLayoutChanging: 요약/상세 카드가 펼쳐지거나 접히기 시작할 때 호출합니다.
-  최소 0.5초, 기본은 1.5초 동안 popupGrace를 켜서, 그 사이에 들어오는
-  mouseleave나 좌표 판정을 즉시 믿지 않고 미루게 합니다.
+  최소 POPUP_TRANSITION_GUARD_MS, 기본은 POPUP_INTERACTION_GRACE_MS 동안
+  popupGrace를 켜서, 그 사이에 들어오는 mouseleave나 좌표 판정을 즉시
+  믿지 않고 미루게 합니다.
 */
 function markPopupLayoutChanging(duration = POPUP_INTERACTION_GRACE_MS) {
   cancelPendingPopupClose();
@@ -1176,9 +1177,11 @@ function ensurePopup() {
 }
 
 /*
-  handlePopupMouseOver: 결과 팝업 안으로 마우스가 들어오면
-  숨겨져 있던 기사 요약 카드를 자연스럽게 펼칩니다.
-  이제 화살표 버튼이나 방향 이동 조건은 사용하지 않습니다.
+  handlePopupMouseEnter / handlePopupMouseOver: 결과 팝업 안으로 마우스가
+  들어오면 숨겨져 있던 기사 요약 카드를 자연스럽게 펼칩니다.
+  두 핸들러가 거의 동일한 로직을 수행합니다 — mouseenter/pointerenter는
+  popup에 진입하는 순간 한 번만 발생하고, mouseover는 popup 내부의 자식
+  요소 사이를 이동할 때도 계속 발생하므로 별도로 등록되어 있습니다.
 */
 function handlePopupMouseEnter(event) {
   if (!popup || popup.hidden) {
