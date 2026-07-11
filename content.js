@@ -119,7 +119,6 @@ let lastPointerInsidePopupAt = 0;
 let popupCloseCheckFrame = null;
 let popupState = "hidden";
 let popupHadPointerEntry = false;
-let popupPreDetailPosition = null;
 let popupCompactHomePosition = null;
 let intonePopupScalePercent = DEFAULT_POPUP_SCALE_PERCENT;
 
@@ -969,17 +968,6 @@ function requestCloseCheckAfterPointerTransition() {
   closePopupImmediatelyIfPointerOutside();
 }
 
-function isPopupInteractionGraceActive() {
-  // 팝업 밖으로 나간 뒤 버티는 유예시간은 더 이상 사용하지 않습니다.
-  // 상세보기/간략히보기 전환 중에도 실제 커서가 팝업 밖이면 즉시 닫습니다.
-  return false;
-}
-
-function schedulePopupCloseAfterGrace() {
-  // 기존 1.5초 유예 닫힘 예약을 제거하고 즉시 외부 좌표를 확인합니다.
-  closePopupImmediatelyIfPointerOutside();
-}
-
 function schedulePopupCloseFromPointerExit(delay = POPUP_CLOSE_DELAY_MS) {
   cancelPendingPopupClose();
   if (delay > 0) {
@@ -1039,18 +1027,6 @@ function isPointerInsideActiveAreas() {
   }
 
   return false;
-}
-
-function shouldHoldPopupNearSafeZone() {
-  return false;
-}
-
-function shouldHoldPopupForSummaryReveal() {
-  return false;
-}
-
-function handlePopupPointerSafety() {
-  // 상태머신 방식으로 재작성했으므로 별도 안전영역 로직은 사용하지 않습니다.
 }
 
 function closePopupFromPointerExit() {
@@ -1113,19 +1089,6 @@ function isSummaryRevealEnabled() {
   );
 }
 
-function getSummaryRevealDirection() {
-  return popup?.dataset.summaryDirection === "up" ? "up" : "down";
-}
-
-function isPointerInSummaryRevealCorridor() {
-  return false;
-}
-
-function handleSummaryRevealPointer() {
-  // 마우스 이동만으로 요약/상세 상태를 임의 변경하지 않습니다.
-  // 요약은 popup의 pointerenter/mouseover에서만 compact → summary로 전환됩니다.
-}
-
 function revealSummaryPanel() {
   if (!isSummaryRevealEnabled() || !popup) {
     return;
@@ -1169,37 +1132,6 @@ function rememberCompactHomePosition() {
   if (position) {
     popupCompactHomePosition = position;
   }
-}
-
-function restorePopupPosition(position) {
-  if (!popup || popup.hidden || !position) {
-    return;
-  }
-  const { left, top } = getClampedPopupPosition(position.left, position.top);
-  popup.classList.add("ai-news-popup--moving");
-  popup.style.left = `${left}px`;
-  popup.style.top = `${top}px`;
-  lastPopupPosition = { left, top };
-  window.clearTimeout(popupRepositionTimer);
-  popupRepositionTimer = window.setTimeout(() => {
-    popup?.classList.remove("ai-news-popup--moving");
-  }, POPUP_REPOSITION_ANIMATION_MS);
-}
-
-function updateSummaryRevealDirection(left, top, height) {
-  if (!popup || !popup.classList.contains("ai-news-popup--result")) {
-    return;
-  }
-
-  const viewportPadding = POPUP_VIEWPORT_PADDING_PX;
-  const spaceAbove = Math.max(0, top - viewportPadding);
-  const spaceBelow = Math.max(0, window.innerHeight - (top + height) - viewportPadding);
-  const direction = spaceBelow >= 250 || spaceBelow >= spaceAbove ? "down" : "up";
-  popup.dataset.summaryDirection = direction;
-}
-
-function renderSummaryRevealArrow() {
-  return "";
 }
 
 // ─────────────────────────────────────────────
@@ -1424,11 +1356,6 @@ function toggleDetails(button) {
   // 상세보기/간략히보기는 오직 이 버튼 클릭으로만 바뀝니다.
   // 마우스 이동, 스크롤, 위치 보정에서는 이 상태를 건드리지 않습니다.
   const willOpen = !details.classList.contains("is-open");
-
-  if (willOpen) {
-    // 상세보기로 커지기 전 위치를 저장합니다. 나중에 간략히 보기로 돌아갈 때 이 위치로 복귀합니다.
-    popupPreDetailPosition = getCurrentPopupPosition() || popupCompactHomePosition;
-  }
 
   markPopupLayoutChanging(POPUP_INTERACTION_GRACE_MS);
   details.classList.toggle("is-open", willOpen);
@@ -1731,7 +1658,6 @@ function showResultPopup(result) {
     popupElement.innerHTML = `
       <section class="inton-mini-shell">
         ${renderCompactTopBar("중간", "중간")}
-        ${renderSummaryRevealArrow()}
         <section class="inton-summary-card">
           <header class="inton-card-head">
             ${renderMetricIcon("summary")}
@@ -1782,7 +1708,6 @@ function showResultPopup(result) {
   popupElement.innerHTML = `
     <section class="inton-mini-shell">
       ${renderCompactTopBar(credibilityShort, clickbaitShort)}
-      ${renderSummaryRevealArrow()}
 
       <section class="inton-summary-card">
         <header class="inton-card-head">
@@ -2013,26 +1938,6 @@ function renderScoreRow(key, label, max, breakdown, type) {
 }
 
 /*
-  renderSummaryLines: AI가 반환한 요약(summary)과 경고(warning) 텍스트를
-  "." 또는 줄바꿈 기준으로 쪼개 최대 3개 항목의 목록으로 만들어 반환합니다.
-  너무 긴 텍스트를 깔끔하게 여러 줄로 분리해서 보여주기 위한 함수입니다.
-*/
-function renderSummaryLines(summary, warning) {
-  const lines = [summary, warning]
-    .flatMap((text) => String(text).split(/[.\n]/)) // "."과 줄바꿈으로 쪼갬
-    .map((text) => text.trim())
-    .filter(Boolean)   // 빈 문자열 제거
-    .slice(0, 3);      // 최대 3개만 사용
-
-  return `
-    <div class="news-ai-summary__title">분석 요약</div>
-    <ul>
-      ${lines.map((line) => `<li>${escapeHtml(line)}.</li>`).join("")}
-    </ul>
-  `;
-}
-
-/*
   renderActions: 팝업 하단의 버튼 영역 HTML을 반환합니다.
   hasDetails가 false이면 "상세 분석 보기" 버튼을 비활성화(disabled)합니다.
   (뉴스 기사가 아닐 때는 세부 항목이 없으므로 비활성화)
@@ -2049,40 +1954,6 @@ function renderActions(hasDetails) {
     </div>
   `;
 }
-
-/*
-  renderBreakdown: 신뢰도 또는 어그로도의 세부 항목 점수 목록 HTML을 반환합니다.
-
-  매개변수:
-    title     - 섹션 제목 ("신뢰도" 또는 "어그로도")
-    breakdown - AI가 반환한 세부 점수 객체 { source_clarity: 15, ... }
-    rows      - 표시할 항목 정보 배열. 각 항목은 [키, 표시명, 최대점수] 형태
-                예) ["source_clarity", "출처 명확성", 20]
-
-  각 항목을 "출처 명확성 — 15/20" 형태로 나열합니다.
-*/
-function renderBreakdown(title, breakdown = {}, rows) {
-  const items = rows
-    .map(([key, label, max]) => {
-      // breakdown 객체에서 해당 키의 값을 숫자로 변환. 유효하지 않으면 0
-      const value = Number.isFinite(Number(breakdown[key])) ? Number(breakdown[key]) : 0;
-      return `
-        <div class="news-ai-breakdown__row">
-          <span>${escapeHtml(label)}</span>
-          <b>${value}/${max}</b>
-        </div>
-      `;
-    })
-    .join(""); // 배열을 하나의 문자열로 합침
-
-  return `
-    <div class="news-ai-breakdown">
-      <h3>${escapeHtml(title)}</h3>
-      ${items}
-    </div>
-  `;
-}
-
 
 function normalizePopupScalePercent(value) {
   const numeric = Number(value);
@@ -2132,7 +2003,6 @@ function showPopupElement(popupElement) {
     cancelScheduledSummaryReveal();
     armPopupGrace();
     popupHadPointerEntry = false;
-    popupPreDetailPosition = null;
     popupCompactHomePosition = null;
   }
   popupElement.hidden = false;
@@ -2200,25 +2070,6 @@ function updatePopupViewportLimits() {
 
   popup.style.setProperty("--inton-detail-max-height", `${detailMaxHeight}px`);
   popup.style.setProperty("--inton-summary-max-height", `${summaryMaxHeight}px`);
-}
-
-function getClampedPopupPosition(left, top) {
-  if (!popup || popup.hidden) {
-    return { left, top };
-  }
-
-  updatePopupViewportLimits();
-  const padding = POPUP_VIEWPORT_PADDING_PX;
-  const rect = popup.getBoundingClientRect();
-  const width = Math.min(rect.width, Math.max(1, window.innerWidth - padding * 2));
-  const height = Math.min(rect.height, Math.max(1, window.innerHeight - padding * 2));
-  const maxLeft = Math.max(padding, window.innerWidth - width - padding);
-  const maxTop = Math.max(padding, window.innerHeight - height - padding);
-
-  return {
-    left: clampNumber(left, padding, maxLeft),
-    top: clampNumber(top, padding, maxTop)
-  };
 }
 
 // ─────────────────────────────────────────────
@@ -2301,7 +2152,6 @@ function positionPopup(clientX, clientY) {
   popupElement.style.left = `${left}px`;
   popupElement.style.top = `${top}px`;
   lastPopupPosition = { left, top };
-  updateSummaryRevealDirection(left, top, height);
 }
 
 function stopPopupGrowthTracking() {
@@ -2460,7 +2310,6 @@ function resetPopupStateImmediately(options = {}) {
       "ai-news-popup--error",
       "ai-news-popup--result"
     );
-    popup.removeAttribute("data-summary-direction");
   }
 
   activeLink = null;
@@ -2472,7 +2321,6 @@ function resetPopupStateImmediately(options = {}) {
   lastPopupPosition = null;
   pointerInsidePopup = false;
   popupHadPointerEntry = false;
-  popupPreDetailPosition = null;
   popupCompactHomePosition = null;
   suppressPopupMouseOutUntil = 0;
   currentRequestId += 1;
@@ -2521,7 +2369,6 @@ function hidePopup() {
       lastPopupPosition = null;
       pointerInsidePopup = false;
       popupHadPointerEntry = false;
-      popupPreDetailPosition = null;
       popupCompactHomePosition = null;
       activeLinkHoverStartedAt = 0;
       activeLinkPopupAllowedAt = 0;
