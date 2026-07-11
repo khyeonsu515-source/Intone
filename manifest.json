@@ -27,6 +27,12 @@
         "<all_urls>"
       ],
       "js": [
+        "content-state.js",
+        "content-utils.js",
+        "content-render.js",
+        "content-position.js",
+        "content-popup.js",
+        "content-hover.js",
         "content.js"
       ],
       "css": [
