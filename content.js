@@ -1062,6 +1062,25 @@ function getPopupOpenPoint() {
   return popupOpenPoint || popupAnchor;
 }
 
+/*
+  positionFreshPopupAtOpenPoint: showErrorPopup/showResultPopup이 내용을 채운
+  직후 공통으로 실행하는 마무리 단계입니다. 커서 근처에 팝업을 배치하고,
+  요약 카드가 있는 결과 팝업이라면(withSummaryReveal) 등장 직후 커서가 이미
+  팝업 안에 들어와 있는 경우를 대비한 진입 유예/요약 펼침 확인까지 처리합니다.
+*/
+function positionFreshPopupAtOpenPoint({ withSummaryReveal = false } = {}) {
+  const point = getPopupOpenPoint();
+  if (!point) {
+    return;
+  }
+  positionPopup(point.x, point.y);
+  rememberCompactHomePosition();
+  if (withSummaryReveal) {
+    armPopupEntryGrace();
+    revealSummaryIfPointerAlreadyInside();
+  }
+}
+
 function showLoadingPopupAtAnchor(message) {
   const point = getPopupOpenPoint();
   if (point) {
@@ -1162,9 +1181,9 @@ function ensurePopup() {
   // 팝업 내부 클릭 이벤트 (버튼 동작 처리)
   popup.addEventListener("click", handlePopupClick);
   // 결과 팝업 안으로 마우스가 들어오면 기사 요약 카드를 펼침
-  popup.addEventListener("mouseenter", handlePopupMouseEnter);
-  popup.addEventListener("pointerenter", handlePopupMouseEnter);
-  popup.addEventListener("mouseover", handlePopupMouseOver);
+  popup.addEventListener("mouseenter", handlePopupPointerActivity);
+  popup.addEventListener("pointerenter", handlePopupPointerActivity);
+  popup.addEventListener("mouseover", handlePopupPointerActivity);
   // 팝업 전체 바깥으로 마우스가 나갈 때만 닫힘 판정을 실행합니다.
   // mouseout은 내부 요소 이동에도 계속 발생하므로 사용하지 않습니다.
   popup.addEventListener("mouseleave", handlePopupMouseLeave);
@@ -1177,37 +1196,12 @@ function ensurePopup() {
 }
 
 /*
-  handlePopupMouseEnter / handlePopupMouseOver: 결과 팝업 안으로 마우스가
-  들어오면 숨겨져 있던 기사 요약 카드를 자연스럽게 펼칩니다.
-  두 핸들러가 거의 동일한 로직을 수행합니다 — mouseenter/pointerenter는
-  popup에 진입하는 순간 한 번만 발생하고, mouseover는 popup 내부의 자식
-  요소 사이를 이동할 때도 계속 발생하므로 별도로 등록되어 있습니다.
+  handlePopupPointerActivity: 결과 팝업 안으로 마우스가 들어오거나 내부에서
+  움직일 때 숨겨져 있던 기사 요약 카드를 자연스럽게 펼칩니다.
+  mouseenter/pointerenter(진입 순간 한 번)와 mouseover(내부 자식 요소 사이를
+  이동할 때마다) 세 이벤트 모두 같은 처리가 필요해서 한 핸들러로 등록합니다.
 */
-function handlePopupMouseEnter(event) {
-  if (!popup || popup.hidden) {
-    return;
-  }
-  rememberPointerFromEvent(event);
-  pointerInsidePopup = true;
-  popupHadPointerEntry = true;
-  lastPointerInsidePopupAt = Date.now();
-  cancelPopupEntryGrace();
-  cancelPendingPopupClose();
-  if (popup.classList.contains("ai-news-popup--closing")) {
-    window.clearTimeout(popupHideAnimationTimer);
-    popup.classList.remove("ai-news-popup--closing");
-    setPopupState(inferPopupStateFromClasses());
-  }
-  if (isSummaryRevealEnabled()) {
-    if (isPopupGraceActive()) {
-      scheduleSummaryRevealAfterTransition();
-    } else {
-      revealSummaryPanel();
-    }
-  }
-}
-
-function handlePopupMouseOver(event) {
+function handlePopupPointerActivity(event) {
   if (!popup || popup.hidden || !popup.contains(event.target)) {
     return;
   }
@@ -1629,12 +1623,7 @@ function showErrorPopup(message) {
     </section>
   `;
   showPopupElement(popupElement);
-
-  const point = getPopupOpenPoint();
-  if (point) {
-    positionPopup(point.x, point.y);
-    rememberCompactHomePosition();
-  }
+  positionFreshPopupAtOpenPoint();
 }
 
 /*
@@ -1675,28 +1664,16 @@ function showResultPopup(result) {
         </section>
       </section>
     `;
-  if (wasLoadingPopup) {
-    popupElement.classList.add("ai-news-popup--from-loading");
-    window.setTimeout(() => {
-      popupElement?.classList.remove("ai-news-popup--from-loading");
-    }, 320);
-  }
 
     if (wasLoadingPopup) {
-    popupElement.classList.add("ai-news-popup--from-loading");
-    window.setTimeout(() => {
-      popupElement?.classList.remove("ai-news-popup--from-loading");
-    }, 320);
-  }
-
-  showPopupElement(popupElement);
-    const point = getPopupOpenPoint();
-    if (point) {
-      positionPopup(point.x, point.y);
-      rememberCompactHomePosition();
-      armPopupEntryGrace();
-      revealSummaryIfPointerAlreadyInside();
+      popupElement.classList.add("ai-news-popup--from-loading");
+      window.setTimeout(() => {
+        popupElement?.classList.remove("ai-news-popup--from-loading");
+      }, 320);
     }
+
+    showPopupElement(popupElement);
+    positionFreshPopupAtOpenPoint({ withSummaryReveal: true });
     return;
   }
 
@@ -1771,14 +1748,7 @@ function showResultPopup(result) {
   }
 
   showPopupElement(popupElement);
-
-  const point = getPopupOpenPoint();
-  if (point) {
-    positionPopup(point.x, point.y);
-    rememberCompactHomePosition();
-    armPopupEntryGrace();
-    revealSummaryIfPointerAlreadyInside();
-  }
+  positionFreshPopupAtOpenPoint({ withSummaryReveal: true });
 }
 
 
