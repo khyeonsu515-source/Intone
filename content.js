@@ -2006,8 +2006,10 @@ function renderScoreRow(key, label, max, breakdown, type) {
   return `
     <div class="inton-score-row inton-score-row--${escapeHtml(type)}">
       <span>${escapeHtml(label)}</span>
-      <i><em style="width:0%" data-target-width="${percent}%"></em></i>
-      <b>${value}/${max}</b>
+      <i>
+        <em style="width:0%" data-target-width="${percent}%"></em>
+        <b>${value}/${max}</b>
+      </i>
     </div>
   `;
 }
