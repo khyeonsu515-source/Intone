@@ -236,10 +236,17 @@ function toggleDetails(button) {
   trackPopupHeightForGrowth();
 
   requestAnimationFrame(() => {
-    // 팝업 밖이면 즉시 닫습니다. 단, 간략히 보기 직후 위치 복귀로 다시 안쪽에 들어오면 유지됩니다.
+    // 팝업 밖이면 닫습니다. 단, 간략히 보기 직후 위치 복귀로 다시 안쪽에 들어오면 유지됩니다.
+    // 방금 markPopupLayoutChanging()으로 켠 유예(popupGrace)가 아직 살아있다면,
+    // 크기 변화 중 좌표가 순간적으로 밖처럼 보이는 것뿐일 수 있으므로 즉시 닫지 않고
+    // 유예가 끝나는 시점까지 닫기를 미룹니다.
     requestAnimationFrame(() => {
       if (!isPointerInsideActiveAreas()) {
-        closePopupFromPointerExit();
+        if (isPopupGraceActive()) {
+          schedulePopupCloseFromPointerExit(getPopupGraceRemaining());
+        } else {
+          closePopupFromPointerExit();
+        }
       } else {
         cancelPendingPopupClose();
       }
