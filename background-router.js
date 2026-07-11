@@ -236,6 +236,8 @@ async function handleAnalyzeRequest(payload, sender) {
   const analysis  = await requestGroqAnalysis(credentials, analysisInput);
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
   const validated = validateAnalysis(analysis);
+  // og:image는 AI 분석과 무관하게 페이지에서 그대로 추출한 값이라 별도로 붙입니다.
+  validated.image_url = resolveImageUrl(extracted.og_image, url);
 
   // 분석 결과를 캐시에 저장 (6시간 동안 같은 URL 재분석 시 재사용)
   setCachedResult(url, validated);
