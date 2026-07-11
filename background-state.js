@@ -31,6 +31,12 @@ const FIREBASE_DEFAULT_PROJECT_ID = "intone-analysis";
 const FIREBASE_DEFAULT_API_KEY = "AIzaSyBQT-UNNgB5Ujlkw_RFsPNsfKfj0jIXQnY";
 const FIRESTORE_COLLECTION = "analysisResults";
 
+// 같은 사건을 다룬 기사끼리 묶기 위한 색인용 컬렉션 두 개.
+// keywordIndex: 키워드 하나당 문서 하나, 그 키워드가 등장한 topic들의 ID 목록을 가짐.
+// topics: 사건/이슈 하나당 문서 하나, 대표 topic 라벨 + 연결된 키워드 + 소속 기사 URL 목록을 가짐.
+const KEYWORD_INDEX_COLLECTION = "keywordIndex";
+const TOPICS_COLLECTION = "topics";
+
 // Firestore는 여러 사용자가 함께 쓰는 공유 캐시라서 로컬 캐시(6시간)보다 오래 유지합니다.
 const FIRESTORE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7일
 

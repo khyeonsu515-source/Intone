@@ -26,15 +26,20 @@ async function getFirebaseConfig() {
 }
 
 /*
-  hashUrlForFirestoreId: URL을 Firestore 문서 ID로 쓸 수 있게 SHA-256 해시로 바꿉니다.
-  URL을 그대로 문서 ID로 쓰면 "/"가 경로 구분자와 충돌하고 길이 제한도 넘기 쉬워서,
-  고정 길이 16진수 문자열로 변환해서 사용합니다.
+  sha256Hex: 문자열을 SHA-256 해시의 16진수 문자열로 바꿉니다. URL이나 키워드를
+  그대로 Firestore 문서 ID로 쓰면 "/" 같은 문자가 경로 구분자와 충돌하고 길이
+  제한도 넘기 쉬워서, 고정 길이 16진수 문자열로 변환해서 문서 ID로 사용합니다.
 */
-async function hashUrlForFirestoreId(url) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(url));
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+// URL 해시는 그대로 유지 (기존 이름을 쓰는 코드가 많아서 별칭으로 남겨둠)
+async function hashUrlForFirestoreId(url) {
+  return sha256Hex(url);
 }
 
 /*
@@ -203,14 +208,14 @@ async function getSharedCachedResult(url) {
 }
 
 /*
-  getRecentTopicCandidates: 최근 저장된 기사들의 topic/core_keywords만 모아서
-  반환합니다. 새 기사를 분석하기 전에 이 목록을 AI에게 참고자료로 보여주고
-  "같은 사건이면 이 topic/keywords를 그대로 재사용해라"라고 지시하기 위한 것으로,
-  기사마다 따로따로 키워드를 지어내서 같은 사건인데도 문자열이 겹치지 않는
-  문제를 줄이기 위한 용도입니다. 실패하면 빈 배열을 반환해서 분석 자체는
-  평소대로(참고 목록 없이) 진행되게 합니다.
+  getRecentTopics: topics 컬렉션(사건/이슈 단위로 정리된 색인)에서 최근
+  업데이트된 주제들을 가져옵니다. 새 기사를 분석하기 전에 이 목록을 AI에게
+  참고자료로 보여주고 "같은 사건이면 이 topic/keywords를 그대로 재사용해라"라고
+  지시하기 위한 것으로, 기사마다 따로따로 키워드를 지어내서 같은 사건인데도
+  문자열이 겹치지 않는 문제를 줄이기 위한 용도입니다. 실패하면 빈 배열을
+  반환해서 분석 자체는 평소대로(참고 목록 없이) 진행되게 합니다.
 */
-async function getRecentTopicCandidates(maxCount = TOPIC_CANDIDATE_LIMIT) {
+async function getRecentTopics(maxCount = TOPIC_CANDIDATE_LIMIT) {
   const config = await getFirebaseConfig();
   if (!config) {
     return [];
@@ -220,8 +225,8 @@ async function getRecentTopicCandidates(maxCount = TOPIC_CANDIDATE_LIMIT) {
     const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents:runQuery?key=${config.apiKey}`;
     const body = JSON.stringify({
       structuredQuery: {
-        from: [{ collectionId: FIRESTORE_COLLECTION }],
-        orderBy: [{ field: { fieldPath: "savedAt" }, direction: "DESCENDING" }],
+        from: [{ collectionId: TOPICS_COLLECTION }],
+        orderBy: [{ field: { fieldPath: "updatedAt" }, direction: "DESCENDING" }],
         limit: maxCount
       }
     });
@@ -238,19 +243,18 @@ async function getRecentTopicCandidates(maxCount = TOPIC_CANDIDATE_LIMIT) {
     }
 
     const rows = await response.json();
-    const seenTopics = new Set();
     const topics = [];
 
     for (const row of Array.isArray(rows) ? rows : []) {
       const record = row?.document?.fields ? firestoreFieldsToObject(row.document.fields) : null;
-      const topic = typeof record?.topic === "string" ? record.topic.trim() : "";
-      if (!record?.is_article || !topic || seenTopics.has(topic)) {
+      if (!record?.topic) {
         continue;
       }
-      seenTopics.add(topic);
+      // 프롬프트에는 core_keywords라는 이름으로 보여줘서, AI 응답 스키마와
+      // 똑같은 키 이름을 쓰도록 맞춥니다(헷갈리지 않게).
       topics.push({
-        topic,
-        core_keywords: Array.isArray(record.core_keywords) ? record.core_keywords : []
+        topic: record.topic,
+        core_keywords: Array.isArray(record.keywords) ? record.keywords : []
       });
     }
 
@@ -258,6 +262,210 @@ async function getRecentTopicCandidates(maxCount = TOPIC_CANDIDATE_LIMIT) {
   } catch (error) {
     console.warn("[Intone/Firestore] 주제 목록 조회 오류", error);
     return [];
+  }
+}
+
+/*
+  getKeywordIndexEntry: 이 키워드가 이미 다른 기사에서 등장한 적이 있는지
+  keywordIndex 컬렉션에서 확인합니다. 없으면 null을 반환합니다.
+*/
+async function getKeywordIndexEntry(keyword) {
+  const config = await getFirebaseConfig();
+  const normalized = typeof keyword === "string" ? keyword.trim() : "";
+  if (!config || !normalized) {
+    return null;
+  }
+
+  try {
+    const docId = await sha256Hex(normalized);
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${KEYWORD_INDEX_COLLECTION}/${docId}?key=${config.apiKey}`;
+    const response = await fetch(endpoint, { method: "GET" });
+
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      console.warn("[Intone/Firestore] 키워드 조회 실패", response.status, await response.text());
+      return null;
+    }
+
+    const doc = await response.json();
+    return { id: docId, ...firestoreFieldsToObject(doc.fields) };
+  } catch (error) {
+    console.warn("[Intone/Firestore] 키워드 조회 오류", error);
+    return null;
+  }
+}
+
+/*
+  getTopicById: topics 컬렉션에서 topicId로 주제 문서 하나를 가져옵니다.
+*/
+async function getTopicById(topicId) {
+  const config = await getFirebaseConfig();
+  if (!config || !topicId) {
+    return null;
+  }
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${TOPICS_COLLECTION}/${topicId}?key=${config.apiKey}`;
+    const response = await fetch(endpoint, { method: "GET" });
+
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      console.warn("[Intone/Firestore] 주제 조회 실패", response.status, await response.text());
+      return null;
+    }
+
+    const doc = await response.json();
+    return { id: topicId, ...firestoreFieldsToObject(doc.fields) };
+  } catch (error) {
+    console.warn("[Intone/Firestore] 주제 조회 오류", error);
+    return null;
+  }
+}
+
+/*
+  saveTopicDoc: topics/{topicId} 문서를 통째로 써넣습니다(PATCH — 없으면 생성,
+  있으면 덮어씀).
+*/
+async function saveTopicDoc(topicId, data) {
+  const config = await getFirebaseConfig();
+  if (!config || !topicId) {
+    return false;
+  }
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${TOPICS_COLLECTION}/${topicId}?key=${config.apiKey}`;
+    const response = await fetch(endpoint, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: objectToFirestoreFields(data) })
+    });
+
+    if (!response.ok) {
+      console.warn("[Intone/Firestore] 주제 저장 실패", response.status, await response.text());
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn("[Intone/Firestore] 주제 저장 오류", error);
+    return false;
+  }
+}
+
+/*
+  linkKeywordToTopic: keywordIndex/{hash(keyword)} 문서에 topicId를 연결합니다.
+  키워드가 처음 등장했으면 새로 만들고, 이미 있으면 topicIds 배열에 그
+  topicId가 없을 때만 추가합니다(있으면 아무것도 하지 않음).
+*/
+async function linkKeywordToTopic(keyword, topicId) {
+  const config = await getFirebaseConfig();
+  const normalized = typeof keyword === "string" ? keyword.trim() : "";
+  if (!config || !normalized || !topicId) {
+    return;
+  }
+
+  try {
+    const existing = await getKeywordIndexEntry(normalized);
+    const topicIds = Array.isArray(existing?.topicIds) ? existing.topicIds : [];
+
+    if (topicIds.includes(topicId)) {
+      return; // 이미 연결되어 있음
+    }
+
+    const docId = await sha256Hex(normalized);
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${KEYWORD_INDEX_COLLECTION}/${docId}?key=${config.apiKey}`;
+    const response = await fetch(endpoint, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fields: objectToFirestoreFields({
+          keyword: normalized,
+          topicIds: [...topicIds, topicId],
+          updatedAt: Date.now()
+        })
+      })
+    });
+
+    if (!response.ok) {
+      console.warn("[Intone/Firestore] 키워드 연결 실패", response.status, await response.text());
+    }
+  } catch (error) {
+    console.warn("[Intone/Firestore] 키워드 연결 오류", error);
+  }
+}
+
+/*
+  indexArticleTopic: 방금 분석을 마친 기사를 키워드 색인에 등록하고, 같은
+  사건을 다루는 기존 주제가 있으면 그 주제에 묶고 없으면 새 주제를 만듭니다.
+  handleAnalyzeRequest가 분석 완료 후 결과를 보여준 뒤 조용히 호출합니다
+  (실패해도 사용자에게 보여줄 결과에는 영향 없음).
+
+  알고리즘:
+    ① 이 기사의 core_keywords 각각으로 keywordIndex를 조회해서, 이미 연결된
+       topicId 후보들을 모은다.
+    ② 후보 주제들 중 topic 라벨이 이 기사의 topic과 정확히 같은 게 있으면
+       "같은 사건"으로 보고 그 주제에 기사를 추가한다.
+    ③ 정확히 같은 라벨이 없으면(키워드는 겹쳤지만 다른 사건이거나, 아예
+       겹치는 키워드가 없으면) 새 주제를 만든다.
+    ④ 이 기사의 키워드들을 모두 최종 topicId에 연결한다 — 기존 키워드인데
+       이 topicId가 아직 없으면 추가되므로, "같은 키워드, 다른 주제" 상황도
+       자연히 그 키워드 아래에 주제가 하나 더 늘어나는 식으로 처리된다.
+*/
+async function indexArticleTopic(url, validated) {
+  const config = await getFirebaseConfig();
+  const topic = typeof validated?.topic === "string" ? validated.topic.trim() : "";
+  const keywords = Array.isArray(validated?.core_keywords)
+    ? validated.core_keywords.filter((kw) => typeof kw === "string" && kw.trim())
+    : [];
+
+  if (!config || !url || !topic || !keywords.length) {
+    return; // 색인할 재료(주제/키워드)가 부족하면 건너뜀
+  }
+
+  try {
+    // ① 키워드로 후보 주제 모으기
+    const keywordEntries = await Promise.all(keywords.map((kw) => getKeywordIndexEntry(kw)));
+    const candidateTopicIds = new Set();
+    keywordEntries.forEach((entry) => {
+      (entry?.topicIds || []).forEach((id) => candidateTopicIds.add(id));
+    });
+    const candidateTopics = await Promise.all([...candidateTopicIds].map((id) => getTopicById(id)));
+
+    // ② 정확히 같은 topic 라벨을 가진 후보 찾기
+    const matched = candidateTopics.find((candidate) => candidate?.topic === topic);
+
+    let topicId;
+    if (matched) {
+      // 같은 사건 → 기존 주제에 기사 추가
+      topicId = matched.id;
+      const articleUrls = Array.isArray(matched.articleUrls) ? matched.articleUrls : [];
+      const mergedKeywords = Array.from(new Set([...(matched.keywords || []), ...keywords]));
+      await saveTopicDoc(topicId, {
+        topic: matched.topic,
+        keywords: mergedKeywords,
+        articleUrls: articleUrls.includes(url) ? articleUrls : [...articleUrls, url],
+        createdAt: typeof matched.createdAt === "number" ? matched.createdAt : Date.now(),
+        updatedAt: Date.now()
+      });
+    } else {
+      // ③ 새 사건 → 새 주제 생성
+      topicId = crypto.randomUUID();
+      await saveTopicDoc(topicId, {
+        topic,
+        keywords,
+        articleUrls: [url],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      });
+    }
+
+    // ④ 이 기사의 키워드들을 최종 topicId에 연결
+    await Promise.all(keywords.map((kw) => linkKeywordToTopic(kw, topicId)));
+  } catch (error) {
+    console.warn("[Intone/Firestore] 주제 색인 오류", error);
   }
 }
 

@@ -236,7 +236,7 @@ async function handleAnalyzeRequest(payload, sender) {
   // 같은 사건을 다룬 기사끼리 topic/keywords가 겹치도록, 이미 저장된 주제
   // 목록을 먼저 가져와서 AI에게 참고자료로 넘깁니다. 실패해도(빈 배열이어도)
   // 분석 자체는 평소대로 진행됩니다.
-  const existingTopics = await getRecentTopicCandidates().catch(() => []);
+  const existingTopics = await getRecentTopics().catch(() => []);
   const analysis  = await requestGroqAnalysis(credentials, analysisInput, existingTopics);
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
   const validated = validateAnalysis(analysis);
@@ -244,6 +244,8 @@ async function handleAnalyzeRequest(payload, sender) {
   // 분석 결과를 캐시에 저장 (6시간 동안 같은 URL 재분석 시 재사용)
   setCachedResult(url, validated);
   setFirestoreCachedResult(url, validated); // Firebase에도 공유(실패해도 무시)
+  // 키워드/주제 색인에도 등록 — 같은 사건 기사끼리 묶기 위함(실패해도 무시)
+  indexArticleTopic(url, validated).catch(() => {});
 
   // 최종 완료 상태 표시
   updateStatus({
