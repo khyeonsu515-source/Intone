@@ -9,7 +9,8 @@
   "host_permissions": [
     "<all_urls>",
     "https://api.groq.com/*",
-    "https://api.cerebras.ai/*"
+    "https://api.cerebras.ai/*",
+    "https://firestore.googleapis.com/*"
   ],
   "icons": {
     "16": "assets/icon16.png",
