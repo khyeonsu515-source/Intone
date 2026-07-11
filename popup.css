@@ -1263,22 +1263,6 @@
   transform: translateY(0) scale(1) !important;
 }
 
-/* JS가 data-summary-direction을 up으로 잡아도 시각 순서는 항상 동일하게 유지 */
-#ai-news-link-popup.ai-news-popup--separated[data-summary-direction="up"] .inton-compact-bar,
-#ai-news-link-popup.ai-news-popup--separated[data-summary-direction="down"] .inton-compact-bar {
-  order: 1 !important;
-}
-
-#ai-news-link-popup.ai-news-popup--separated[data-summary-direction="up"] .inton-summary-card,
-#ai-news-link-popup.ai-news-popup--separated[data-summary-direction="down"] .inton-summary-card {
-  order: 2 !important;
-}
-
-#ai-news-link-popup.ai-news-popup--separated[data-summary-direction="up"] .inton-detail-card,
-#ai-news-link-popup.ai-news-popup--separated[data-summary-direction="down"] .inton-detail-card {
-  order: 3 !important;
-}
-
 /* ------------------------------------------------------------
    7. Responsive
    ------------------------------------------------------------ */

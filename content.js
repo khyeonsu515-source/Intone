@@ -39,7 +39,7 @@ const UNKNOWN_NEWS_DELAY_MS = 4000;
 // AI에게 넘기는 링크 텍스트의 최대 길이 (토큰 절약용)
 const MAX_LINK_TEXT_LENGTH = 300;
 
-const POPUP_INTERACTION_GRACE_MS = 1500;
+const POPUP_INTERACTION_GRACE_MS = 2000;
 
 // 팝업 밖으로 나가는 즉시 닫힘 모션을 시작합니다.
 const POPUP_CLOSE_DELAY_MS = 0;
@@ -54,8 +54,8 @@ const POPUP_VIEWPORT_PADDING_PX = 8;
 
 // 요약/상세 카드가 펼쳐지거나 접힐 때, 팝업 높이 변화를 따라가며
 // top 위치를 매 프레임 재계산하는 추적 애니메이션 지속 시간.
-// 내부 카드의 max-height 전환(520ms, popup.css)보다 넉넉하게 잡습니다.
-const POPUP_GROWTH_TRACK_MS = 600;
+// 내부 카드의 max-height 전환(280ms, popup.css)보다 넉넉하게 잡습니다.
+const POPUP_GROWTH_TRACK_MS = 360;
 
 // 결과 팝업이 링크 옆에 뜬 직후, 사용자가 링크에서 팝업으로 이동할 시간을 짧게 허용합니다.
 // 이 시간은 일반적인 닫힘 유예가 아니라, 초기 진입 안정화 전용입니다.
@@ -117,10 +117,8 @@ let lastPointerClientY = null;
 let pointerInsidePopup = false;
 let lastPointerInsidePopupAt = 0;
 let popupCloseCheckFrame = null;
-let popupLayoutMutationUntil = 0;
 let popupState = "hidden";
 let popupHadPointerEntry = false;
-let popupPreDetailPosition = null;
 let popupCompactHomePosition = null;
 let intonePopupScalePercent = DEFAULT_POPUP_SCALE_PERCENT;
 
@@ -145,8 +143,15 @@ let popupOpenPoint = null;
 let summaryRevealCloseTimer = null;
 let popupEntryGraceTimer = null;
 let popupEntryGraceUntil = 0;
-let popupTransitionGuardTimer = null;
-let popupTransitionGuardUntil = 0;
+
+// 팝업이 등장하거나(appear) 요약/상세가 펼쳐지고 접힐 때(layout) 잠깐 동안
+// "지금 전환 중이니 mouseleave/좌표 판정을 그대로 믿지 말고 기다려라"라고
+// 표시하는 단일 유예 상태입니다. 예전에는 popupTransitionGuardUntil(전환 가드,
+// 최소 0.5초)과 popupLayoutMutationUntil(레이아웃 변경, 최대 1.5초) 두 개의
+// 타이머로 나뉘어 있었지만, 실제로는 항상 같은 시점에 같은 값으로 설정되던
+// 경우가 대부분이라 하나로 합쳤습니다.
+let popupGraceTimer = null;
+let popupGraceUntil = 0;
 let summaryRevealAfterTransitionTimer = null;
 
 
@@ -382,27 +387,34 @@ function isPopupEntryGraceActive() {
   return Date.now() < popupEntryGraceUntil;
 }
 
-function cancelPopupTransitionGuard() {
-  window.clearTimeout(popupTransitionGuardTimer);
-  popupTransitionGuardTimer = null;
-  popupTransitionGuardUntil = 0;
+/*
+  popupGrace: 팝업이 등장/이동하거나 요약·상세 카드가 펼쳐지고 접힐 때 잠깐 동안
+  "지금은 mouseleave나 좌표 판정을 곧이곧대로 믿지 말라"고 표시하는 유예 상태입니다.
+  이 유예가 켜져 있는 동안에는 팝업이 시각적으로 움직이거나 크기가 바뀌는 중이라,
+  브라우저가 mouseleave를 잘못/일찍 보내거나 커서가 일시적으로 밖에 있는 것처럼
+  보일 수 있어서 실제로 닫을지 판단하는 걸 미룹니다.
+*/
+function cancelPopupGrace() {
+  window.clearTimeout(popupGraceTimer);
+  popupGraceTimer = null;
+  popupGraceUntil = 0;
 }
 
-function isPopupTransitionGuardActive() {
-  return Date.now() < popupTransitionGuardUntil;
+function isPopupGraceActive() {
+  return Date.now() < popupGraceUntil;
 }
 
-function armPopupTransitionGuard(duration = POPUP_TRANSITION_GUARD_MS) {
-  window.clearTimeout(popupTransitionGuardTimer);
-  popupTransitionGuardUntil = Date.now() + duration;
-  popupTransitionGuardTimer = window.setTimeout(() => {
-    popupTransitionGuardTimer = null;
-    popupTransitionGuardUntil = 0;
+function armPopupGrace(duration = POPUP_TRANSITION_GUARD_MS) {
+  window.clearTimeout(popupGraceTimer);
+  popupGraceUntil = Date.now() + duration;
+  popupGraceTimer = window.setTimeout(() => {
+    popupGraceTimer = null;
+    popupGraceUntil = 0;
   }, duration);
 }
 
-function getPopupTransitionGuardRemaining(extra = 30) {
-  return Math.max(0, popupTransitionGuardUntil - Date.now() + extra);
+function getPopupGraceRemaining(extra = 30) {
+  return Math.max(0, popupGraceUntil - Date.now() + extra);
 }
 
 function cancelScheduledSummaryReveal() {
@@ -412,8 +424,8 @@ function cancelScheduledSummaryReveal() {
 
 function scheduleSummaryRevealAfterTransition() {
   cancelScheduledSummaryReveal();
-  const remaining = isPopupTransitionGuardActive()
-    ? getPopupTransitionGuardRemaining(20)
+  const remaining = isPopupGraceActive()
+    ? getPopupGraceRemaining(20)
     : 0;
   summaryRevealAfterTransitionTimer = window.setTimeout(() => {
     summaryRevealAfterTransitionTimer = null;
@@ -882,11 +894,8 @@ function refreshPopupPointerState(clientX, clientY) {
   if (popupHadPointerEntry && popupState !== "closing") {
     // 요약/상세 전환이나 위치 보정 중에는 팝업 rect가 순간적으로 변해서
     // 커서가 밖에 있는 것처럼 보일 수 있으므로 즉시 닫지 않습니다.
-    if (isPopupTransitionGuardActive()) {
-      schedulePopupCloseFromPointerExit(getPopupTransitionGuardRemaining());
-      return false;
-    }
-    if (isPopupLayoutChanging()) {
+    if (isPopupGraceActive()) {
+      schedulePopupCloseFromPointerExit(getPopupGraceRemaining());
       return false;
     }
     closePopupFromPointerExit();
@@ -944,30 +953,19 @@ function inferPopupStateFromClasses() {
   return "open";
 }
 
+/*
+  markPopupLayoutChanging: 요약/상세 카드가 펼쳐지거나 접히기 시작할 때 호출합니다.
+  최소 POPUP_TRANSITION_GUARD_MS, 기본은 POPUP_INTERACTION_GRACE_MS 동안
+  popupGrace를 켜서, 그 사이에 들어오는 mouseleave나 좌표 판정을 즉시
+  믿지 않고 미루게 합니다.
+*/
 function markPopupLayoutChanging(duration = POPUP_INTERACTION_GRACE_MS) {
   cancelPendingPopupClose();
-  popupLayoutMutationUntil = Date.now() + duration;
   suppressPopupMouseOutUntil = 0;
-  // 레이아웃 전환이 시작되는 순간에도 최소 0.5초는 닫힘 판정을 유예합니다.
-  armPopupTransitionGuard(Math.max(POPUP_TRANSITION_GUARD_MS, Math.min(duration, POPUP_INTERACTION_GRACE_MS)));
-}
-
-function isPopupLayoutChanging() {
-  return Date.now() < popupLayoutMutationUntil;
+  armPopupGrace(Math.max(POPUP_TRANSITION_GUARD_MS, Math.min(duration, POPUP_INTERACTION_GRACE_MS)));
 }
 
 function requestCloseCheckAfterPointerTransition() {
-  closePopupImmediatelyIfPointerOutside();
-}
-
-function isPopupInteractionGraceActive() {
-  // 팝업 밖으로 나간 뒤 버티는 유예시간은 더 이상 사용하지 않습니다.
-  // 상세보기/간략히보기 전환 중에도 실제 커서가 팝업 밖이면 즉시 닫습니다.
-  return false;
-}
-
-function schedulePopupCloseAfterGrace() {
-  // 기존 1.5초 유예 닫힘 예약을 제거하고 즉시 외부 좌표를 확인합니다.
   closePopupImmediatelyIfPointerOutside();
 }
 
@@ -997,19 +995,14 @@ function closePopupImmediatelyIfPointerOutside() {
       return;
     }
 
-    if (isPopupTransitionGuardActive()) {
-      popupDeferredCloseTimer = window.setTimeout(closePopupImmediatelyIfPointerOutside, getPopupTransitionGuardRemaining());
+    if (isPopupGraceActive()) {
+      popupDeferredCloseTimer = window.setTimeout(closePopupImmediatelyIfPointerOutside, getPopupGraceRemaining());
       return;
     }
 
     if (!popupHadPointerEntry && isPopupEntryGraceActive()) {
       const remaining = Math.max(0, popupEntryGraceUntil - Date.now() + 30);
       popupDeferredCloseTimer = window.setTimeout(closePopupImmediatelyIfPointerOutside, remaining);
-      return;
-    }
-
-    if (isPopupLayoutChanging()) {
-      popupDeferredCloseTimer = window.setTimeout(closePopupImmediatelyIfPointerOutside, 120);
       return;
     }
 
@@ -1035,18 +1028,6 @@ function isPointerInsideActiveAreas() {
   }
 
   return false;
-}
-
-function shouldHoldPopupNearSafeZone() {
-  return false;
-}
-
-function shouldHoldPopupForSummaryReveal() {
-  return false;
-}
-
-function handlePopupPointerSafety() {
-  // 상태머신 방식으로 재작성했으므로 별도 안전영역 로직은 사용하지 않습니다.
 }
 
 function closePopupFromPointerExit() {
@@ -1109,19 +1090,6 @@ function isSummaryRevealEnabled() {
   );
 }
 
-function getSummaryRevealDirection() {
-  return popup?.dataset.summaryDirection === "up" ? "up" : "down";
-}
-
-function isPointerInSummaryRevealCorridor() {
-  return false;
-}
-
-function handleSummaryRevealPointer() {
-  // 마우스 이동만으로 요약/상세 상태를 임의 변경하지 않습니다.
-  // 요약은 popup의 pointerenter/mouseover에서만 compact → summary로 전환됩니다.
-}
-
 function revealSummaryPanel() {
   if (!isSummaryRevealEnabled() || !popup) {
     return;
@@ -1167,37 +1135,6 @@ function rememberCompactHomePosition() {
   }
 }
 
-function restorePopupPosition(position) {
-  if (!popup || popup.hidden || !position) {
-    return;
-  }
-  const { left, top } = getClampedPopupPosition(position.left, position.top);
-  popup.classList.add("ai-news-popup--moving");
-  popup.style.left = `${left}px`;
-  popup.style.top = `${top}px`;
-  lastPopupPosition = { left, top };
-  window.clearTimeout(popupRepositionTimer);
-  popupRepositionTimer = window.setTimeout(() => {
-    popup?.classList.remove("ai-news-popup--moving");
-  }, POPUP_REPOSITION_ANIMATION_MS);
-}
-
-function updateSummaryRevealDirection(left, top, height) {
-  if (!popup || !popup.classList.contains("ai-news-popup--result")) {
-    return;
-  }
-
-  const viewportPadding = POPUP_VIEWPORT_PADDING_PX;
-  const spaceAbove = Math.max(0, top - viewportPadding);
-  const spaceBelow = Math.max(0, window.innerHeight - (top + height) - viewportPadding);
-  const direction = spaceBelow >= 250 || spaceBelow >= spaceAbove ? "down" : "up";
-  popup.dataset.summaryDirection = direction;
-}
-
-function renderSummaryRevealArrow() {
-  return "";
-}
-
 // ─────────────────────────────────────────────
 // 팝업 DOM 요소 관리
 // ─────────────────────────────────────────────
@@ -1240,9 +1177,11 @@ function ensurePopup() {
 }
 
 /*
-  handlePopupMouseOver: 결과 팝업 안으로 마우스가 들어오면
-  숨겨져 있던 기사 요약 카드를 자연스럽게 펼칩니다.
-  이제 화살표 버튼이나 방향 이동 조건은 사용하지 않습니다.
+  handlePopupMouseEnter / handlePopupMouseOver: 결과 팝업 안으로 마우스가
+  들어오면 숨겨져 있던 기사 요약 카드를 자연스럽게 펼칩니다.
+  두 핸들러가 거의 동일한 로직을 수행합니다 — mouseenter/pointerenter는
+  popup에 진입하는 순간 한 번만 발생하고, mouseover는 popup 내부의 자식
+  요소 사이를 이동할 때도 계속 발생하므로 별도로 등록되어 있습니다.
 */
 function handlePopupMouseEnter(event) {
   if (!popup || popup.hidden) {
@@ -1260,7 +1199,7 @@ function handlePopupMouseEnter(event) {
     setPopupState(inferPopupStateFromClasses());
   }
   if (isSummaryRevealEnabled()) {
-    if (isPopupTransitionGuardActive()) {
+    if (isPopupGraceActive()) {
       scheduleSummaryRevealAfterTransition();
     } else {
       revealSummaryPanel();
@@ -1287,7 +1226,7 @@ function handlePopupMouseOver(event) {
   }
 
   if (isSummaryRevealEnabled()) {
-    if (isPopupTransitionGuardActive()) {
+    if (isPopupGraceActive()) {
       scheduleSummaryRevealAfterTransition();
     } else {
       revealSummaryPanel();
@@ -1303,17 +1242,11 @@ function handlePopupMouseLeave(event) {
     return;
   }
 
-  // 팝업이 등장/확장/위치보정되는 0.5초 동안은 mouseleave가 오더라도
-  // 즉시 닫지 않고 전환이 끝난 뒤 실제 좌표를 다시 확인합니다.
-  if (isPopupTransitionGuardActive()) {
-    schedulePopupCloseFromPointerExit(getPopupTransitionGuardRemaining());
-    return;
-  }
-
-  // 팝업이 펼쳐지거나 화면 안으로 보정되는 중에는 브라우저가 mouseleave를
-  // 잘못 발생시키는 경우가 있어, 보정이 끝난 뒤 실제 좌표를 다시 확인합니다.
-  if (isPopupLayoutChanging()) {
-    schedulePopupCloseFromPointerExit(140);
+  // 팝업이 등장/확장/접힘/위치보정되는 동안은 mouseleave가 오더라도 즉시 닫지
+  // 않고, 브라우저가 잘못/일찍 보낸 것일 수 있으니 전환이 끝난 뒤 실제 좌표를
+  // 다시 확인합니다.
+  if (isPopupGraceActive()) {
+    schedulePopupCloseFromPointerExit(getPopupGraceRemaining());
     return;
   }
 
@@ -1426,11 +1359,6 @@ function toggleDetails(button) {
   // 상세보기/간략히보기는 오직 이 버튼 클릭으로만 바뀝니다.
   // 마우스 이동, 스크롤, 위치 보정에서는 이 상태를 건드리지 않습니다.
   const willOpen = !details.classList.contains("is-open");
-
-  if (willOpen) {
-    // 상세보기로 커지기 전 위치를 저장합니다. 나중에 간략히 보기로 돌아갈 때 이 위치로 복귀합니다.
-    popupPreDetailPosition = getCurrentPopupPosition() || popupCompactHomePosition;
-  }
 
   markPopupLayoutChanging(POPUP_INTERACTION_GRACE_MS);
   details.classList.toggle("is-open", willOpen);
@@ -1733,7 +1661,6 @@ function showResultPopup(result) {
     popupElement.innerHTML = `
       <section class="inton-mini-shell">
         ${renderCompactTopBar("중간", "중간")}
-        ${renderSummaryRevealArrow()}
         <section class="inton-summary-card">
           <header class="inton-card-head">
             ${renderMetricIcon("summary")}
@@ -1784,7 +1711,6 @@ function showResultPopup(result) {
   popupElement.innerHTML = `
     <section class="inton-mini-shell">
       ${renderCompactTopBar(credibilityShort, clickbaitShort)}
-      ${renderSummaryRevealArrow()}
 
       <section class="inton-summary-card">
         <header class="inton-card-head">
@@ -2015,26 +1941,6 @@ function renderScoreRow(key, label, max, breakdown, type) {
 }
 
 /*
-  renderSummaryLines: AI가 반환한 요약(summary)과 경고(warning) 텍스트를
-  "." 또는 줄바꿈 기준으로 쪼개 최대 3개 항목의 목록으로 만들어 반환합니다.
-  너무 긴 텍스트를 깔끔하게 여러 줄로 분리해서 보여주기 위한 함수입니다.
-*/
-function renderSummaryLines(summary, warning) {
-  const lines = [summary, warning]
-    .flatMap((text) => String(text).split(/[.\n]/)) // "."과 줄바꿈으로 쪼갬
-    .map((text) => text.trim())
-    .filter(Boolean)   // 빈 문자열 제거
-    .slice(0, 3);      // 최대 3개만 사용
-
-  return `
-    <div class="news-ai-summary__title">분석 요약</div>
-    <ul>
-      ${lines.map((line) => `<li>${escapeHtml(line)}.</li>`).join("")}
-    </ul>
-  `;
-}
-
-/*
   renderActions: 팝업 하단의 버튼 영역 HTML을 반환합니다.
   hasDetails가 false이면 "상세 분석 보기" 버튼을 비활성화(disabled)합니다.
   (뉴스 기사가 아닐 때는 세부 항목이 없으므로 비활성화)
@@ -2051,40 +1957,6 @@ function renderActions(hasDetails) {
     </div>
   `;
 }
-
-/*
-  renderBreakdown: 신뢰도 또는 어그로도의 세부 항목 점수 목록 HTML을 반환합니다.
-
-  매개변수:
-    title     - 섹션 제목 ("신뢰도" 또는 "어그로도")
-    breakdown - AI가 반환한 세부 점수 객체 { source_clarity: 15, ... }
-    rows      - 표시할 항목 정보 배열. 각 항목은 [키, 표시명, 최대점수] 형태
-                예) ["source_clarity", "출처 명확성", 20]
-
-  각 항목을 "출처 명확성 — 15/20" 형태로 나열합니다.
-*/
-function renderBreakdown(title, breakdown = {}, rows) {
-  const items = rows
-    .map(([key, label, max]) => {
-      // breakdown 객체에서 해당 키의 값을 숫자로 변환. 유효하지 않으면 0
-      const value = Number.isFinite(Number(breakdown[key])) ? Number(breakdown[key]) : 0;
-      return `
-        <div class="news-ai-breakdown__row">
-          <span>${escapeHtml(label)}</span>
-          <b>${value}/${max}</b>
-        </div>
-      `;
-    })
-    .join(""); // 배열을 하나의 문자열로 합침
-
-  return `
-    <div class="news-ai-breakdown">
-      <h3>${escapeHtml(title)}</h3>
-      ${items}
-    </div>
-  `;
-}
-
 
 function normalizePopupScalePercent(value) {
   const numeric = Number(value);
@@ -2132,9 +2004,8 @@ function showPopupElement(popupElement) {
     lastPopupPosition = null;
     cancelPopupEntryGrace();
     cancelScheduledSummaryReveal();
-    armPopupTransitionGuard();
+    armPopupGrace();
     popupHadPointerEntry = false;
-    popupPreDetailPosition = null;
     popupCompactHomePosition = null;
   }
   popupElement.hidden = false;
@@ -2202,25 +2073,6 @@ function updatePopupViewportLimits() {
 
   popup.style.setProperty("--inton-detail-max-height", `${detailMaxHeight}px`);
   popup.style.setProperty("--inton-summary-max-height", `${summaryMaxHeight}px`);
-}
-
-function getClampedPopupPosition(left, top) {
-  if (!popup || popup.hidden) {
-    return { left, top };
-  }
-
-  updatePopupViewportLimits();
-  const padding = POPUP_VIEWPORT_PADDING_PX;
-  const rect = popup.getBoundingClientRect();
-  const width = Math.min(rect.width, Math.max(1, window.innerWidth - padding * 2));
-  const height = Math.min(rect.height, Math.max(1, window.innerHeight - padding * 2));
-  const maxLeft = Math.max(padding, window.innerWidth - width - padding);
-  const maxTop = Math.max(padding, window.innerHeight - height - padding);
-
-  return {
-    left: clampNumber(left, padding, maxLeft),
-    top: clampNumber(top, padding, maxTop)
-  };
 }
 
 // ─────────────────────────────────────────────
@@ -2303,7 +2155,6 @@ function positionPopup(clientX, clientY) {
   popupElement.style.left = `${left}px`;
   popupElement.style.top = `${top}px`;
   lastPopupPosition = { left, top };
-  updateSummaryRevealDirection(left, top, height);
 }
 
 function stopPopupGrowthTracking() {
@@ -2437,7 +2288,7 @@ function resetPopupStateImmediately(options = {}) {
   cancelPendingPopupClose();
   cancelPopupEntryGrace();
   cancelScheduledSummaryReveal();
-  cancelPopupTransitionGuard();
+  cancelPopupGrace();
 
   window.clearTimeout(summaryRevealCloseTimer);
   window.clearTimeout(popupHideAnimationTimer);
@@ -2462,7 +2313,6 @@ function resetPopupStateImmediately(options = {}) {
       "ai-news-popup--error",
       "ai-news-popup--result"
     );
-    popup.removeAttribute("data-summary-direction");
   }
 
   activeLink = null;
@@ -2474,9 +2324,7 @@ function resetPopupStateImmediately(options = {}) {
   lastPopupPosition = null;
   pointerInsidePopup = false;
   popupHadPointerEntry = false;
-  popupPreDetailPosition = null;
   popupCompactHomePosition = null;
-  popupLayoutMutationUntil = 0;
   suppressPopupMouseOutUntil = 0;
   currentRequestId += 1;
   clearAnalysisLock();
@@ -2498,7 +2346,7 @@ function hidePopup() {
   window.clearTimeout(summaryRevealCloseTimer);
   cancelPopupEntryGrace();
   cancelScheduledSummaryReveal();
-  cancelPopupTransitionGuard();
+  cancelPopupGrace();
   cancelPendingPopupDisplay();
   window.clearTimeout(popupGraceCloseTimer);
   window.clearTimeout(popupDeferredCloseTimer);
@@ -2507,7 +2355,6 @@ function hidePopup() {
     cancelAnimationFrame(popupCloseCheckFrame);
     popupCloseCheckFrame = null;
   }
-  popupLayoutMutationUntil = 0;
 
   if (popup && !popup.hidden) {
     popup.classList.remove("ai-news-popup--safe-zone-active", "ai-news-popup--moving", "ai-news-popup--appearing");
@@ -2525,7 +2372,6 @@ function hidePopup() {
       lastPopupPosition = null;
       pointerInsidePopup = false;
       popupHadPointerEntry = false;
-      popupPreDetailPosition = null;
       popupCompactHomePosition = null;
       activeLinkHoverStartedAt = 0;
       activeLinkPopupAllowedAt = 0;
