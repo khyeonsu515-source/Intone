@@ -264,7 +264,16 @@ function updatePopupViewportLimits() {
     popup.style.maxHeight = "none";
     popup.style.overflow = "visible";
     popup.style.setProperty("--inton-popup-max-height", `${availableHeight}px`);
-    popup.style.setProperty("--inton-detail-max-height", `${Math.max(170, availableHeight - 130)}px`);
+
+    // 세부 카드가 펼쳐진 상태에서 리사이즈/스크롤이 일어나도, 카드 자체는
+    // 스크롤을 갖지 않고 실제 콘텐츠 높이를 그대로 유지합니다(스크롤은
+    // .inton-mini-shell 하나로만 처리).
+    const openDetails = popup.querySelector(".ai-news-popup__details.is-open");
+    popup.style.setProperty(
+      "--inton-detail-max-height",
+      openDetails ? `${openDetails.scrollHeight + 4}px` : `${Math.max(170, availableHeight - 130)}px`
+    );
+
     popup.style.setProperty("--inton-summary-max-height", `${Math.max(110, Math.min(340, availableHeight - 100))}px`);
     return;
   }

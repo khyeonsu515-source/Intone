@@ -642,6 +642,9 @@
 }
 
 #ai-news-link-popup.ai-news-popup--separated .inton-detail-card.ai-news-popup__details.is-open {
+  /* 세부 항목 자체는 더 이상 스크롤하지 않습니다. 실제 콘텐츠 높이만큼
+     max-height를 잡아주고(JS가 계산), 넘치는 부분은 팝업 전체를 감싸는
+     .inton-mini-shell 하나의 스크롤 영역이 처리합니다. */
   max-height: var(--inton-detail-max-height, min(560px, calc(100vh - 150px))) !important;
 
   padding: 13px !important;
@@ -650,8 +653,7 @@
   opacity: 1 !important;
   pointer-events: auto !important;
 
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
+  overflow: visible !important;
 
   transform: translateY(0) scale(1) !important;
 }

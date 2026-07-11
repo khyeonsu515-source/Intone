@@ -212,6 +212,10 @@ function toggleDetails(button) {
   setPopupState(willOpen ? "detail" : "summary");
 
   if (willOpen) {
+    // 세부 카드 자체가 스크롤을 갖지 않도록, 실제 콘텐츠 높이(scrollHeight)만큼
+    // max-height를 잡아줍니다. 이러면 세부 카드 안에서는 절대 넘치지 않고,
+    // 넘치는 부분은 팝업 전체를 감싸는 .inton-mini-shell 스크롤 하나로만 처리됩니다.
+    popup.style.setProperty("--inton-detail-max-height", `${details.scrollHeight + 4}px`);
     animateScoreReveal(details);
   }
 
