@@ -22,14 +22,14 @@ function sanitizeKeywordList(value, maxCount) {
 }
 
 /*
-  validateDirection: direction 객체({stance, summary})를 검증합니다.
+  validateDirection: direction 객체({stance, reason})를 검증합니다.
   stance가 허용된 값이 아니면 "중립적"으로 대체합니다.
 */
 function validateDirection(value) {
   const stance = ANALYSIS_STANCE_VALUES.includes(value?.stance) ? value.stance : "중립적";
   return {
     stance,
-    summary: sanitizeText(value?.summary || "", 200)
+    reason: sanitizeText(value?.reason || "", 200)
   };
 }
 
