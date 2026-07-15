@@ -66,21 +66,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 위 두 가지가 아닌 알 수 없는 메시지는 무시
   if (message?.type === "CHECK_ANALYSIS_CACHE") {
     const url = normalizeUrl(message.payload?.url || "");
-    getSharedCachedResult(url)
+    getCachedResult(url)
       .then((cached) => {
         if (cached) {
           updateStatus({
             stage: "complete",
-            label: cached.source === "firebase" ? "Firebase 분석 기록 표시" : "캐시 결과 표시",
+            label: "캐시 결과 표시",
             url,
-            detail: cached.source === "firebase"
-              ? "이 URL은 이미 분석된 기록이 Firebase에 있습니다."
-              : "같은 URL의 이전 분석 결과를 표시합니다.",
+            detail: "같은 URL의 이전 분석 결과를 표시합니다.",
             tabId: sender.tab?.id || null
           });
         }
 
-        sendResponse({ ok: true, cached: cached?.data || null });
+        sendResponse({ ok: true, cached: cached || null });
       })
       .catch(() => sendResponse({ ok: true, cached: null }));
     return true;
@@ -91,13 +89,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     isKnownNewsUrl(url)
       .then((isKnownNews) => sendResponse({ ok: true, is_known_news: isKnownNews }))
       .catch(() => sendResponse({ ok: true, is_known_news: false }));
-    return true;
-  }
-
-  // options.html의 "연결 테스트" 버튼이 보내는 메시지: Firestore에 테스트 문서를
-  // 쓰고 읽어서 실제로 저장이 되는지 바로 확인합니다.
-  if (message?.type === "TEST_FIREBASE_CONNECTION") {
-    testFirebaseConnection(message.payload).then((result) => sendResponse(result));
     return true;
   }
 
@@ -166,19 +157,17 @@ async function handleAnalyzeRequest(payload, sender) {
 
   // force_refresh가 true면 캐시를 무시하고 새로 분석
   // force_refresh가 false(기본값)이면 캐시에 결과가 있는지 먼저 확인
-  const cached = payload?.force_refresh ? null : await getSharedCachedResult(url);
+  const cached = payload?.force_refresh ? null : await getCachedResult(url);
   if (cached) {
     // 캐시된 결과가 있으면 AI 호출 없이 바로 반환 (빠르고 API 사용량 절약)
     updateStatus({
       stage: "complete",
-      label: cached.source === "firebase" ? "Firebase 분석 기록 표시" : "캐시 결과 표시",
+      label: "캐시 결과 표시",
       url,
-      detail: cached.source === "firebase"
-        ? "이 URL은 이미 분석된 기록이 Firebase에 있습니다."
-        : "같은 URL의 이전 분석 결과를 표시합니다.",
+      detail: "같은 URL의 이전 분석 결과를 표시합니다.",
       tabId
     });
-    return cached.data;
+    return cached;
   }
 
   // 브라우저 저장소에서 Groq API 키를 가져옴
@@ -216,7 +205,6 @@ async function handleAnalyzeRequest(payload, sender) {
   if (!articleCheck.is_article) {
     const result = buildNotArticleResult(articleCheck); // 빈 점수 결과 객체 생성
     await setCachedResult(url, result);                        // 이것도 캐시에 저장
-    setFirestoreCachedResult(url, result);                      // Firebase에도 공유(실패해도 무시)
     updateStatus({
       stage: "not_article",
       label: "뉴스 기사 아님",
@@ -233,36 +221,16 @@ async function handleAnalyzeRequest(payload, sender) {
     await learnNewsPatternFromConfirmedArticle(credentials, analysisInput).catch(() => {});
   }
 
-  // 같은 사건을 다룬 기사끼리 묶이도록, AI에게 topic/keywords를 새로 지어
-  // 내게 하기 전에 먼저 이미 알고 있는 키워드가 이 기사 텍스트에 실제로
-  // 등장하는지 확인합니다(findTopicMatchForArticle). 후보가 하나로 확실히
-  // 좁혀지면(resolvedTopic) AI에게 topic/core_keywords를 아예 묻지 않고
-  // 그 값을 그대로 씁니다. 모호하거나(후보 여러 개) 아예 없으면 AI에게
-  // 새로 만들게 하되, 있는 후보는 참고자료로 건네줍니다.
-  const searchableText = [
-    analysisInput.page_title,
-    analysisInput.og_title,
-    analysisInput.link_text,
-    analysisInput.article_text
-  ].filter(Boolean).join(" ");
-  const { matchedTopic, candidateTopics } = await findTopicMatchForArticle(searchableText)
-    .catch(() => ({ matchedTopic: null, candidateTopics: [] }));
-
-  const analysis  = await requestGroqAnalysis(credentials, analysisInput, {
-    existingTopics: candidateTopics,
-    resolvedTopic: matchedTopic
-  });
+  const analysis  = await requestGroqAnalysis(credentials, analysisInput);
   // validateAnalysis()는 점수를 유효 범위로 보정하고 텍스트를 정제
-  // (resolvedTopic이 있으면 topic/core_keywords는 AI 응답 대신 이 값을 그대로 씀)
-  const validated = validateAnalysis(analysis, matchedTopic);
-  // 대표 이미지는 AI 분석과 무관하게 페이지에서 그대로 뽑아온 값이라 별도로 붙입니다.
-  validated.image_url = resolveImageUrl(extracted.og_image, url);
+  const validated = validateAnalysis(analysis);
+  // 실제 기사 제목은 AI 분석과 무관하게 페이지에서 그대로 뽑아온 값이라 별도로
+  // 붙입니다. og:title(SNS 공유용이라 보통 사이트명 접미사 없이 깔끔함)을
+  // 우선 쓰고, 없으면 <title> 태그 값을 씁니다.
+  validated.article_title = sanitizeText(extracted.og_title || extracted.page_title || "", 200);
 
   // 분석 결과를 캐시에 저장 (6시간 동안 같은 URL 재분석 시 재사용)
   setCachedResult(url, validated);
-  setFirestoreCachedResult(url, validated); // Firebase에도 공유(실패해도 무시)
-  // 키워드/주제 색인에도 등록 — 같은 사건 기사끼리 묶기 위함(실패해도 무시)
-  indexArticleTopic(url, validated).catch(() => {});
 
   // 최종 완료 상태 표시
   updateStatus({

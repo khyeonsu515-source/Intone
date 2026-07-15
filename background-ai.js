@@ -34,17 +34,12 @@ async function requestArticleCheck(credentials, payload) {
   requestGroqAnalysis: 뉴스 기사로 판별된 링크에 대해
   신뢰도 점수, 어그로도 점수, 세부 항목 점수, 요약 등을 AI에게 요청합니다.
   requestArticleCheck와 구조는 동일하지만 다른 프롬프트를 사용합니다.
-
-  topicContext: { existingTopics, resolvedTopic } — findTopicMatchForArticle()로
-  키워드 인덱스를 조회한 결과. resolvedTopic이 있으면(확실한 매칭) AI에게
-  topic/core_keywords를 아예 요청하지 않고, 없으면(모호하거나 매칭 없음)
-  existingTopics를 참고자료로 주고 AI가 직접 만들게 합니다.
 */
-async function requestGroqAnalysis(credentials, payload, topicContext) {
+async function requestGroqAnalysis(credentials, payload) {
   return requestGroqJson(credentials, [
     {
       role: "system",
-      content: buildAnalysisPrompt(topicContext)
+      content: buildAnalysisPrompt()
     },
     {
       role: "user",

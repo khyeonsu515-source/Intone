@@ -58,26 +58,6 @@ function normalizeUrl(url) {
 }
 
 /*
-  resolveImageUrl: og:image의 content 값은 상대 경로("/img/a.jpg")로 오는
-  경우도 있어서, 기사 페이지 URL을 기준으로 절대 URL로 변환합니다.
-  http/https가 아니거나 형식이 잘못된 경우 빈 문자열을 반환합니다.
-*/
-function resolveImageUrl(rawImageUrl, pageUrl) {
-  if (!rawImageUrl) {
-    return "";
-  }
-  try {
-    const resolved = new URL(rawImageUrl, pageUrl);
-    if (!["http:", "https:"].includes(resolved.protocol)) {
-      return "";
-    }
-    return resolved.toString();
-  } catch (error) {
-    return "";
-  }
-}
-
-/*
   getCachedResult: 메모리 캐시에서 해당 URL의 분석 결과를 찾아봅니다.
   결과가 있어도 저장된 지 6시간이 지났으면 삭제하고 null을 반환합니다.
   결과가 없으면 null을 반환합니다.
