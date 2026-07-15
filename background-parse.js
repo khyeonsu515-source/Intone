@@ -44,24 +44,6 @@ function extractMetaContent(html, attributeName, attributeValue) {
 }
 
 /*
-  extractFirstImage: og:image가 없는 페이지를 위한 폴백입니다.
-  HTML에 나오는 <img> 태그를 순서대로 훑어서 처음 발견한 src 값을 반환합니다.
-  (open-graph-scraper도 og:image가 없으면 페이지의 모든 <img>를 훑어 배열로
-  주는데, 여기서는 그 배열의 첫 번째 값에 해당하는 것만 있으면 되므로
-  하나만 찾으면 바로 반환합니다.)
-*/
-function extractFirstImage(html) {
-  const imgTags = html.match(/<img\b[^>]*>/gi) || [];
-  for (const tag of imgTags) {
-    const attributes = parseAttributes(tag);
-    if (attributes.src) {
-      return decodeHtml(attributes.src);
-    }
-  }
-  return "";
-}
-
-/*
   extractArticleText: HTML에서 실제 기사 본문 텍스트를 추출합니다.
   우선 <article> 태그 안에서 찾고, 없으면 전체 HTML에서 <p> 태그를 수집합니다.
   30자 미만의 짧은 단락(메뉴 항목 등)은 제외하고, 최대 12개 단락만 사용합니다.
