@@ -135,7 +135,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     ④ 기사 본문 다운로드 및 추출
     ⑤ AI에게 "뉴스 기사가 맞아?"라고 1차 질문
     ⑥ 기사가 맞으면 AI에게 신뢰도·어그로도 분석 요청
-    ⑦ 결과를 캐시에 저장하고 반환
+    ⑦ 결과를 캐시에 저장
+    ⑧ AI 호출 없이 로컬 키워드를 뽑아 같은 사건 기사끼리 Firestore에서 묶고 반환
 
   매개변수:
     payload - content.js가 보낸 {url, link_text, force_refresh} 객체
@@ -231,6 +232,11 @@ async function handleAnalyzeRequest(payload, sender) {
 
   // 분석 결과를 캐시에 저장 (6시간 동안 같은 URL 재분석 시 재사용)
   setCachedResult(url, validated);
+
+  // 같은 사건을 다룬 기사끼리 묶기 — AI 호출 없이 제목/본문에서 로컬로 뽑은
+  // 키워드로만 Firestore 주제 클러스터를 갱신한다(실패해도 결과 표시에는 영향 없음).
+  const localKeywords = extractLocalKeywords(analysisInput);
+  indexArticleLocalTopic(url, localKeywords).catch(() => {});
 
   // 최종 완료 상태 표시
   updateStatus({

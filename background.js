@@ -37,6 +37,8 @@
     8. background-parse.js    - HTML 파싱 유틸리티
     9. background-learning.js - 뉴스 사이트 학습, API 키 자격 증명 관리
     10. background-utils.js   - 점수 계산, URL 정규화, 로컬 캐시, 문자열 유틸
+    11. background-topics.js  - 로컬 키워드 추출 + Firestore 기반 주제 클러스터링
+                                 (AI API를 호출하지 않음)
 
   =====================================================================
 */
@@ -56,7 +58,8 @@ importScripts(
   "background-validate.js",
   "background-parse.js",
   "background-learning.js",
-  "background-utils.js"
+  "background-utils.js",
+  "background-topics.js"
 );
 
 try {
