@@ -69,11 +69,11 @@ function validateAnalysis(value) {
   };
 
   const normalizedClickbaitBreakdown = {
-    exaggeration:        clampScore(clickbaitBreakdown.exaggeration,       20),
-    curiosity_gap:       clampScore(clickbaitBreakdown.curiosity_gap,      20),
-    title_body_mismatch: clampScore(clickbaitBreakdown.title_body_mismatch, 25),
-    emotional_trigger:   clampScore(clickbaitBreakdown.emotional_trigger,  20),
-    hidden_key_info:     clampScore(clickbaitBreakdown.hidden_key_info,    15)
+    exaggeration:        clampScore(clickbaitBreakdown.exaggeration,       10),
+    curiosity_gap:       clampScore(clickbaitBreakdown.curiosity_gap,      10),
+    title_body_mismatch: clampScore(clickbaitBreakdown.title_body_mismatch, 35),
+    emotional_trigger:   clampScore(clickbaitBreakdown.emotional_trigger,  10),
+    hidden_key_info:     clampScore(clickbaitBreakdown.hidden_key_info,    35)
   };
 
   const credibilityBreakdownTotal = sumScoreParts(normalizedCredibilityBreakdown);

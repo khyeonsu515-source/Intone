@@ -74,15 +74,15 @@ function buildAnalysisPrompt() {
 
 [어그로도 clickbait_score: 0~100점]
 높을수록 나쁨.
-- 과장 표현: 20점
+- 과장 표현: 10점
   "충격", "경악", "역대급", "난리", "소름" 같은 표현
-- 궁금증 유도: 20점
+- 궁금증 유도: 10점
   "알고 보니", "이유는?", "결과는?", "정체는?" 같은 표현
-- 제목/본문 불일치: 25점
+- 제목/본문 불일치: 35점
   제목이 본문보다 과장되거나 다른 인상을 주는 정도
-- 감정 자극: 20점
+- 감정 자극: 10점
   분노, 공포, 혐오, 불안, 논란을 과도하게 유도하는 정도
-- 핵심 정보 은폐: 15점
+- 핵심 정보 은폐: 35점
   제목에서 중요한 주어·대상·결과를 숨기는 정도
 `;
 
@@ -97,11 +97,11 @@ function buildAnalysisPrompt() {
     "context": 9
   },
   "clickbait_breakdown": {
-    "exaggeration": 8,
-    "curiosity_gap": 10,
-    "title_body_mismatch": 7,
-    "emotional_trigger": 8,
-    "hidden_key_info": 5
+    "exaggeration": 4,
+    "curiosity_gap": 4,
+    "title_body_mismatch": 15,
+    "emotional_trigger": 4,
+    "hidden_key_info": 11
   },
   "article_summary": "정부 발표에 따른 정책 변화와 관련 반응을 다룬 기사입니다.",
   "summary": "공식 자료 인용은 있으나 제목에 약간의 클릭 유도 표현이 있음",
