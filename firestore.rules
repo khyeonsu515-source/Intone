@@ -1,0 +1,86 @@
+rules_version = '2';
+
+/*
+  Intone 확장 프로그램은 Firebase Auth 로그인 없이, 공개 웹 API 키로 Firestore
+  REST API를 직접 호출합니다(background-topics.js). 즉 request.auth는 항상
+  null이라 "누가 쓰는지"는 규칙으로 구분할 수 없고, "어떤 모양의 데이터인지"만
+  검증할 수 있습니다. 아래 규칙은 스키마(필드 존재/타입/길이)를 강제해서
+  손상되거나 지나치게 큰 문서가 쌓이는 것을 막는 데 목적이 있습니다 — 악의적인
+  클라이언트가 스키마를 지키면서 가짜 데이터를 넣는 것까지는 막지 못합니다.
+*/
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // topics/{topicId}: 사건/이슈 하나당 문서 하나.
+    // background-topics.js의 saveTopicDoc()이 매번 전체 필드를 다시 써넣으므로
+    // hasOnly로 정확히 이 필드들만 허용한다.
+    match /topics/{topicId} {
+      allow read: if true;
+
+      allow create, update: if
+        request.resource.data.keys().hasOnly(['topic', 'keywords', 'articleUrls', 'createdAt', 'updatedAt'])
+        && request.resource.data.topic is string
+        && request.resource.data.topic.size() > 0
+        && request.resource.data.topic.size() <= 120
+        && request.resource.data.keywords is list
+        && request.resource.data.keywords.size() > 0
+        && request.resource.data.keywords.size() <= 24
+        && request.resource.data.articleUrls is list
+        && request.resource.data.articleUrls.size() > 0
+        && request.resource.data.articleUrls.size() <= 500
+        && request.resource.data.createdAt is number
+        && request.resource.data.updatedAt is number;
+
+      // 클러스터를 통째로 지우는 요청은 허용하지 않는다(추가/갱신만 가능).
+      allow delete: if false;
+    }
+
+    // articles/{articleId}: 기사 하나당 문서 하나.
+    // 문서 ID는 background-topics.js의 sha256Hex(url) 결과이므로 16진수 64자여야 한다.
+    match /articles/{articleId} {
+      allow read: if true;
+
+      allow create, update: if
+        articleId.matches('^[0-9a-f]{64}$')
+        && request.resource.data.keys().hasOnly([
+             'url', 'topicId', 'topic', 'keywords',
+             'credibility_score', 'clickbait_score',
+             'article_title', 'article_summary', 'summary', 'analyzedAt'
+           ])
+        && request.resource.data.url is string
+        && request.resource.data.url.size() > 0
+        && request.resource.data.url.size() <= 2000
+        && request.resource.data.url.matches('^https?://.*')
+        && request.resource.data.topicId is string
+        // 이 기사가 가리키는 topics 문서가 실제로 존재해야 한다(이미 존재해야
+        // 하는 이유: background-topics.js는 topics 문서를 먼저 저장한 뒤에만
+        // articles 문서를 저장하므로, 정상 흐름에서는 항상 참이다).
+        && exists(/databases/$(database)/documents/topics/$(request.resource.data.topicId))
+        && request.resource.data.topic is string
+        && request.resource.data.topic.size() <= 120
+        && request.resource.data.keywords is list
+        && request.resource.data.keywords.size() <= 6
+        && request.resource.data.credibility_score is number
+        && request.resource.data.credibility_score >= 0
+        && request.resource.data.credibility_score <= 100
+        && request.resource.data.clickbait_score is number
+        && request.resource.data.clickbait_score >= 0
+        && request.resource.data.clickbait_score <= 100
+        && request.resource.data.article_title is string
+        && request.resource.data.article_title.size() <= 200
+        && request.resource.data.article_summary is string
+        && request.resource.data.article_summary.size() <= 120
+        && request.resource.data.summary is string
+        && request.resource.data.summary.size() <= 180
+        && request.resource.data.analyzedAt is number;
+
+      allow delete: if false;
+    }
+
+    // 위에서 다루지 않은 나머지 모든 경로는 기본적으로 완전히 차단한다.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
