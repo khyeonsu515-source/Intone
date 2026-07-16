@@ -271,14 +271,43 @@ function pickBestTopicMatch(candidates, keywords) {
   return best;
 }
 
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/*
+  saveArticleDoc: articles/{hash(url)} 문서를 통째로 써넣습니다. topics 문서는
+  articleUrls 배열만 가지고 있어서 "이 주제에 어떤 URL들이 있는지"만 알 수
+  있는데, 이 문서는 그 기사 하나의 신뢰도·어그로도·요약까지 topicId와 함께
+  담아서 "같은 주제의 기사들을 분석 내용까지" 바로 조회할 수 있게 합니다.
+*/
+async function saveArticleDoc(config, docId, data) {
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${ARTICLES_COLLECTION}/${docId}?key=${config.apiKey}`;
+  const response = await fetch(endpoint, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fields: objectToFirestoreFields(data) })
+  });
+
+  if (!response.ok) {
+    console.warn("[Intone/Topics] 기사 저장 실패", response.status, await response.text());
+  }
+}
+
 /*
   indexArticleLocalTopic: 방금 분석을 마친 기사를 로컬 키워드로 색인합니다.
   겹치는 키워드를 가진 기존 주제가 있고 자카드 유사도 기준을 넘으면 그 주제에
-  합류시키고, 아니면 새 주제를 만듭니다. handleAnalyzeRequest가 분석 완료 후
-  결과를 보여준 뒤 조용히 호출합니다(실패해도 사용자에게 보여줄 결과에는 영향 없음).
-  AI API는 호출하지 않습니다 — Firestore 읽기/쓰기만 사용합니다.
+  합류시키고, 아니면 새 주제를 만듭니다. 그다음 이 기사 자체도 topicId를 붙여
+  별도의 articles 컬렉션에 저장합니다 — topics 문서는 URL 목록만 가지고 있고,
+  각 기사의 실제 분석 결과(점수/요약/제목)는 이 컬렉션에서 topicId로 찾습니다.
+  handleAnalyzeRequest가 분석 완료 후 결과를 보여준 뒤 조용히 호출합니다
+  (실패해도 사용자에게 보여줄 결과에는 영향 없음). AI API는 호출하지 않습니다
+  — Firestore 읽기/쓰기만 사용합니다.
 */
-async function indexArticleLocalTopic(url, keywords) {
+async function indexArticleLocalTopic(url, validated, keywords) {
   const config = await getFirebaseConfig();
   const cleanKeywords = Array.isArray(keywords) ? keywords.filter((kw) => typeof kw === "string" && kw) : [];
   if (!config || !url || cleanKeywords.length < TOPIC_MATCH_MIN_KEYWORDS) {
@@ -289,27 +318,47 @@ async function indexArticleLocalTopic(url, keywords) {
     const candidates = await queryTopicsByKeywords(config, cleanKeywords);
     const matched = pickBestTopicMatch(candidates, cleanKeywords);
 
+    let topicId;
+    let topicLabel;
+
     if (matched) {
+      topicId = matched.id;
+      topicLabel = matched.topic || cleanKeywords.slice(0, 2).join(" · ");
       const articleUrls = Array.isArray(matched.articleUrls) ? matched.articleUrls : [];
       const mergedKeywords = Array.from(new Set([...(matched.keywords || []), ...cleanKeywords])).slice(0, TOPIC_KEYWORD_CAP);
-      await saveTopicDoc(config, matched.id, {
-        topic: matched.topic || cleanKeywords.slice(0, 2).join(" · "),
+      await saveTopicDoc(config, topicId, {
+        topic: topicLabel,
         keywords: mergedKeywords,
         articleUrls: articleUrls.includes(url) ? articleUrls : [...articleUrls, url],
         createdAt: typeof matched.createdAt === "number" ? matched.createdAt : Date.now(),
         updatedAt: Date.now()
       });
     } else {
-      const topicId = crypto.randomUUID();
+      topicId = crypto.randomUUID();
+      topicLabel = cleanKeywords.slice(0, 2).join(" · ");
       await saveTopicDoc(config, topicId, {
-        topic: cleanKeywords.slice(0, 2).join(" · "),
+        topic: topicLabel,
         keywords: cleanKeywords,
         articleUrls: [url],
         createdAt: Date.now(),
         updatedAt: Date.now()
       });
     }
+
+    const articleDocId = await sha256Hex(url);
+    await saveArticleDoc(config, articleDocId, {
+      url,
+      topicId,
+      topic: topicLabel,
+      keywords: cleanKeywords,
+      credibility_score: clampScore(validated?.credibility_score),
+      clickbait_score:   clampScore(validated?.clickbait_score),
+      article_title:     sanitizeText(validated?.article_title    || "", 200),
+      article_summary:   sanitizeText(validated?.article_summary  || "", 120),
+      summary:           sanitizeText(validated?.summary          || "", 180),
+      analyzedAt: Date.now()
+    });
   } catch (error) {
-    console.warn("[Intone/Topics] 주제 색인 오류", error);
+    console.warn("[Intone/Topics] 주제/기사 색인 오류", error);
   }
 }

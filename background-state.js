@@ -41,6 +41,11 @@ const FIREBASE_DEFAULT_API_KEY = "AIzaSyBQT-UNNgB5Ujlkw_RFsPNsfKfj0jIXQnY";
 // keywords 배열에 Firestore의 array-contains-any 쿼리를 걸어 후보를 찾는다.
 const TOPICS_COLLECTION = "topics";
 
+// 기사 하나당 문서 하나(문서 ID = URL의 SHA-256 해시). topicId로 topics 문서를
+// 참조하며, 이 기사의 신뢰도·어그로도·요약까지 담아서 "같은 주제의 기사들을
+// 분석 내용까지" 바로 조회할 수 있게 한다.
+const ARTICLES_COLLECTION = "articles";
+
 // 로컬 키워드 추출: 제목 쪽 단어에 더 높은 가중치를 준다(본문 단어보다 주제를 잘 대표하므로).
 const LOCAL_KEYWORD_TITLE_WEIGHT = 3;
 // 이 가중치 합계 이상인 단어만(또는 제목에 등장한 단어는 무조건) 키워드 후보로 남긴다.
