@@ -19,10 +19,11 @@ service cloud.firestore {
       allow read: if true;
 
       allow create, update: if
-        request.resource.data.keys().hasOnly(['topic', 'keywords', 'articleUrls', 'createdAt', 'updatedAt'])
+        request.resource.data.keys().hasOnly(['topic', 'category', 'keywords', 'articleUrls', 'createdAt', 'updatedAt'])
         && request.resource.data.topic is string
         && request.resource.data.topic.size() > 0
         && request.resource.data.topic.size() <= 120
+        && request.resource.data.category in ['정치', '경제', '사회', '국제', '문화', '과학기술', '스포츠', '연예', '기타']
         && request.resource.data.keywords is list
         && request.resource.data.keywords.size() > 0
         && request.resource.data.keywords.size() <= 24
@@ -46,7 +47,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
              'url', 'topicId', 'topic', 'keywords',
              'credibility_score', 'clickbait_score',
-             'article_title', 'article_summary', 'summary', 'analyzedAt'
+             'article_title', 'article_summary', 'summary', 'stance', 'analyzedAt'
            ])
         && request.resource.data.url is string
         && request.resource.data.url.size() > 0
@@ -73,6 +74,7 @@ service cloud.firestore {
         && request.resource.data.article_summary.size() <= 120
         && request.resource.data.summary is string
         && request.resource.data.summary.size() <= 180
+        && request.resource.data.stance in ['매우 부정적', '약간 부정적', '중립적', '약간 긍정적', '매우 긍정적']
         && request.resource.data.analyzedAt is number;
 
       allow delete: if false;

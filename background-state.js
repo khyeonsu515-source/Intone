@@ -61,6 +61,20 @@ const LOCAL_KEYWORD_MAX_COUNT = 6;
 // Firestore에 문서 빈도를 조회한다 — 조회량을 제한하기 위함).
 const LOCAL_KEYWORD_CANDIDATE_POOL = 15;
 
+// topics.category에 허용되는 고정 대분류 목록. 새 topic이 생성될 때 로컬
+// 키워드 사전으로 한 번만 매겨지고 이후 안 바뀐다(AI 호출 없음).
+const TOPIC_CATEGORY_VALUES = ["정치", "경제", "사회", "국제", "문화", "과학기술", "스포츠", "연예", "기타"];
+// classifyLocalCategory에서 이 점수 미만이면(=어느 카테고리 사전에도 뚜렷이
+// 안 걸리면) "기타"로 분류한다.
+const CATEGORY_MIN_SCORE = 1;
+
+// articles.stance에 허용되는 값 목록. 부정 ~ 긍정 단일 스펙트럼이며, 감성
+// 단어 사전 기반으로 기사마다 계산한다(AI 호출 없음).
+const LOCAL_STANCE_VALUES = ["매우 부정적", "약간 부정적", "중립적", "약간 긍정적", "매우 긍정적"];
+// computeLocalStance의 순(긍정-부정) 점수가 이 값 이상/이하면 "약간"/"매우"로 나뉜다.
+const STANCE_WEAK_THRESHOLD = 1;
+const STANCE_STRONG_THRESHOLD = 3;
+
 // 두 기사가 "같은 사건"으로 묶이려면 최소 이만큼 키워드가 겹쳐야 한다.
 const TOPIC_MATCH_MIN_OVERLAP = 2;
 // 그리고 자카드 유사도(교집합/합집합)가 이 값 이상이어야 한다.

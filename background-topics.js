@@ -82,6 +82,113 @@ function tokenizeLocalText(text) {
 }
 
 /*
+  CATEGORY_KEYWORD_DICTIONARY: 9개 대분류마다 그 분야를 대표하는 단어 목록입니다.
+  classifyLocalCategory가 이 사전으로 새 주제의 카테고리를 로컬에서 판단합니다
+  (AI 호출 없음). 완벽한 분류기가 아니라 "대략 어느 분야인가"를 가늠하는
+  용도이며, 어느 사전에도 뚜렷이 걸리지 않으면 "기타"로 분류됩니다.
+*/
+const CATEGORY_KEYWORD_DICTIONARY = {
+  "정치": ["대통령", "국회", "국무총리", "여당", "야당", "국민의힘", "민주당", "법안", "탄핵", "총선", "대선", "청와대", "국정감사", "외교부", "국방부", "의원", "정당", "개헌", "특검", "여야"],
+  "경제": ["금리", "증시", "코스피", "코스닥", "환율", "물가", "수출", "수입", "기업", "실적", "부동산", "세제", "종합부동산세", "고용", "실업률", "투자", "주가", "한국은행", "금융위", "경기", "무역수지", "다주택자"],
+  "사회": ["검찰", "경찰", "화재", "교육부", "학교", "노동조합", "파업", "복지", "연금", "범죄", "판결", "법원", "사건", "사고", "재판", "시위", "집회"],
+  "국제": ["미국", "중국", "일본", "러시아", "우크라이나", "유엔", "정상회담", "외신", "나토", "유럽연합", "이스라엘", "팔레스타인", "대만", "북한"],
+  "문화": ["전시", "공연", "출판", "축제", "종교", "박물관", "문화재", "도서", "미술관", "문학"],
+  "과학기술": ["인공지능", "우주", "연구", "과학", "기술", "반도체", "로봇", "양자", "나사", "위성", "개발자", "소프트웨어", "스타트업"],
+  "스포츠": ["축구", "야구", "농구", "배구", "올림픽", "월드컵", "프로야구", "국가대표", "선수", "감독", "경기", "리그", "챔피언스리그", "메달", "태권도"],
+  "연예": ["배우", "가수", "드라마", "영화", "아이돌", "예능", "콘서트", "앨범", "컴백", "방송", "연예인", "캐스팅"]
+};
+
+/*
+  classifyLocalCategory: 이 기사의 키워드와 원문 텍스트를 CATEGORY_KEYWORD_DICTIONARY와
+  대조해서 가장 점수가 높은 카테고리를 고릅니다. 사전 단어가 이 사건의 대표
+  키워드로 이미 뽑혔으면(더 확실한 신호) 2점, 원문에 등장만 했으면 1점을 줍니다.
+  어느 카테고리도 CATEGORY_MIN_SCORE를 못 넘으면 "기타"를 반환합니다.
+*/
+function classifyLocalCategory(keywords, combinedText) {
+  const text = String(combinedText || "");
+  const keywordSet = new Set(keywords);
+  let bestCategory = null;
+  let bestScore = 0;
+
+  for (const [category, dictionaryWords] of Object.entries(CATEGORY_KEYWORD_DICTIONARY)) {
+    let score = 0;
+    for (const dictWord of dictionaryWords) {
+      if (keywordSet.has(dictWord)) {
+        score += 2;
+      } else if (text.includes(dictWord)) {
+        score += 1;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestCategory = category;
+    }
+  }
+
+  return bestScore >= CATEGORY_MIN_SCORE ? bestCategory : "기타";
+}
+
+/*
+  STANCE_NEGATIVE_WORDS / STANCE_POSITIVE_WORDS: 감성 단어 사전 기반으로 기사의
+  논조를 가늠하기 위한 목록입니다. computeLocalStance가 본문에서 이 단어들의
+  등장 횟수를 세어 순(긍정-부정) 점수를 계산합니다.
+
+  한계: 이건 단어 등장만 세는 방식이라 부정어("문제가 없다"의 "없다"를 긍정으로
+  잘못 셀 수 있음)나 문맥(비판 대상이 누구인지)을 이해하지 못합니다. AI 기반
+  논조 판단보다 정확도가 확실히 낮습니다 — API 호출 없이 대략적인 신호만
+  주는 용도로만 쓰세요.
+*/
+const STANCE_NEGATIVE_WORDS = [
+  "논란", "우려", "비판", "반발", "불만", "항의", "혼란", "피해", "사고", "실패", "부작용", "저하",
+  "악화", "위기", "갈등", "의혹", "잘못", "책임", "규탄", "반대", "충격", "참사", "폭로", "파문",
+  "분노", "불안", "침체", "폭락", "적자", "부실", "은폐", "조작", "왜곡", "질타", "경고", "제재",
+  "기소", "구속", "해고", "붕괴"
+];
+const STANCE_POSITIVE_WORDS = [
+  "성과", "호평", "환영", "기대", "개선", "성공", "협력", "합의", "지지", "극복", "회복", "안정",
+  "성장", "발전", "혁신", "모범", "감사", "축하", "화답", "쾌거", "수상", "달성", "호조", "해결", "박수"
+];
+
+function countOccurrences(text, word) {
+  if (!word) {
+    return 0;
+  }
+  let count = 0;
+  let index = text.indexOf(word);
+  while (index !== -1) {
+    count += 1;
+    index = text.indexOf(word, index + word.length);
+  }
+  return count;
+}
+
+/*
+  computeLocalStance: 본문에서 부정/긍정 단어 등장 횟수를 세어 순 점수를 구하고,
+  STANCE_WEAK_THRESHOLD/STANCE_STRONG_THRESHOLD 기준으로 5단계 중 하나로
+  매핑합니다. AI 호출 없이 기사마다 로컬에서 계산합니다.
+*/
+function computeLocalStance(text) {
+  const normalized = String(text || "");
+  let negativeCount = 0;
+  let positiveCount = 0;
+
+  for (const word of STANCE_NEGATIVE_WORDS) {
+    negativeCount += countOccurrences(normalized, word);
+  }
+  for (const word of STANCE_POSITIVE_WORDS) {
+    positiveCount += countOccurrences(normalized, word);
+  }
+
+  const netScore = positiveCount - negativeCount;
+
+  if (netScore <= -STANCE_STRONG_THRESHOLD) return "매우 부정적";
+  if (netScore <= -STANCE_WEAK_THRESHOLD) return "약간 부정적";
+  if (netScore >= STANCE_STRONG_THRESHOLD) return "매우 긍정적";
+  if (netScore >= STANCE_WEAK_THRESHOLD) return "약간 긍정적";
+  return "중립적";
+}
+
+/*
   keywordsEquivalent: 두 키워드를 "같은 대상"으로 볼지 판단합니다. 완전히
   같으면 당연히 같은 것이고, 그렇지 않더라도 한쪽이 다른 쪽의 접두어이면 같은
   것으로 봅니다 — 한국어 기관/학교명은 뒷부분을 잘라 줄여 쓰는 경우가 많아서
@@ -470,14 +577,21 @@ function pickBestTopicMatch(candidates, keywords) {
   비동기 함수라서, 호출 지점을 이 함수 하나로 모아둡니다).
 
   겹치는 키워드를 가진 기존 주제가 있고 자카드 유사도 기준을 넘으면 그 주제에
-  합류시키고, 아니면 새 주제를 만듭니다. 그다음 이 기사 자체도 topicId를 붙여
-  별도의 articles 컬렉션에 저장하고, 마지막으로 이 기사의 키워드들을
+  합류시키고, 아니면 새 주제를 만듭니다. 새 주제일 때만 두 가지를 추가로
+  합니다 — ① classifyLocalCategory로 9개 대분류 중 하나를 로컬에서 매기고
+  (AI 호출 없음, 기존 주제에 합류할 때는 이미 정해진 category를 그대로 유지),
+  ② credentials가 있으면 AI에게 자연스러운 한 문장 라벨을 딱 한 번 물어봅니다
+  (실패하거나 credentials가 없으면 키워드를 이어붙인 라벨로 대체) — 이 AI
+  호출은 기사마다가 아니라 "새로 생기는 사건 수"만큼만 발생합니다.
+
+  이 기사 자체는 topicId를 붙여 별도의 articles 컬렉션에 저장하며, 여기에는
+  computeLocalStance로 계산한 논조(stance)도 함께 담습니다(이건 기사마다
+  다를 수 있어 매번 로컬에서 다시 계산). 마지막으로 이 기사의 키워드들을
   wordStats에 반영해서 다음 기사의 IDF 계산에 쓰입니다. handleAnalyzeRequest가
   분석 완료 후 결과를 보여준 뒤 조용히 호출합니다(실패해도 사용자에게 보여줄
-  결과에는 영향 없음). AI API는 호출하지 않습니다 — Firestore 읽기/쓰기만
-  사용합니다.
+  결과에는 영향 없음).
 */
-async function indexArticleLocalTopic(url, validated, analysisInput) {
+async function indexArticleLocalTopic(url, validated, analysisInput, credentials) {
   const keywords = await extractLocalKeywords(analysisInput);
   const cleanKeywords = Array.isArray(keywords) ? keywords.filter((kw) => typeof kw === "string" && kw) : [];
 
@@ -486,20 +600,30 @@ async function indexArticleLocalTopic(url, validated, analysisInput) {
     return; // 색인 재료(키워드)가 부족하면 건너뜀 — 오분류를 막기 위함
   }
 
+  const combinedText = [
+    analysisInput?.og_title,
+    analysisInput?.page_title,
+    analysisInput?.link_text,
+    analysisInput?.article_text
+  ].filter(Boolean).join(" ");
+
   try {
     const candidates = await queryTopicsByKeywords(config, cleanKeywords);
     const matched = pickBestTopicMatch(candidates, cleanKeywords);
 
     let topicId;
     let topicLabel;
+    let category;
 
     if (matched) {
       topicId = matched.id;
       topicLabel = matched.topic || cleanKeywords.slice(0, 2).join(" · ");
+      category = TOPIC_CATEGORY_VALUES.includes(matched.category) ? matched.category : "기타";
       const articleUrls = Array.isArray(matched.articleUrls) ? matched.articleUrls : [];
       const mergedKeywords = mergeKeywordLists(matched.keywords || [], cleanKeywords, TOPIC_KEYWORD_CAP);
       await saveFirestoreDoc(config, TOPICS_COLLECTION, topicId, {
         topic: topicLabel,
+        category,
         keywords: mergedKeywords,
         articleUrls: articleUrls.includes(url) ? articleUrls : [...articleUrls, url],
         createdAt: typeof matched.createdAt === "number" ? matched.createdAt : Date.now(),
@@ -507,15 +631,29 @@ async function indexArticleLocalTopic(url, validated, analysisInput) {
       });
     } else {
       topicId = crypto.randomUUID();
-      topicLabel = cleanKeywords.slice(0, 2).join(" · ");
+      category = classifyLocalCategory(cleanKeywords, combinedText);
+
+      const fallbackLabel = cleanKeywords.slice(0, 2).join(" · ");
+      const labelResult = Array.isArray(credentials) && credentials.length
+        ? await requestTopicLabel(credentials, {
+            keywords: cleanKeywords,
+            article_title: validated?.article_title,
+            article_summary: validated?.article_summary
+          }).catch(() => null)
+        : null;
+      topicLabel = sanitizeText(labelResult?.label || fallbackLabel, 60);
+
       await saveFirestoreDoc(config, TOPICS_COLLECTION, topicId, {
         topic: topicLabel,
+        category,
         keywords: cleanKeywords,
         articleUrls: [url],
         createdAt: Date.now(),
         updatedAt: Date.now()
       });
     }
+
+    const stance = computeLocalStance(combinedText);
 
     const articleDocId = await sha256Hex(url);
     await saveFirestoreDoc(config, ARTICLES_COLLECTION, articleDocId, {
@@ -528,6 +666,7 @@ async function indexArticleLocalTopic(url, validated, analysisInput) {
       article_title:     sanitizeText(validated?.article_title    || "", 200),
       article_summary:   sanitizeText(validated?.article_summary  || "", 120),
       summary:           sanitizeText(validated?.summary          || "", 180),
+      stance,
       analyzedAt: Date.now()
     });
 

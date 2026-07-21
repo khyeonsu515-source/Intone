@@ -61,6 +61,24 @@ async function requestNewsSitePattern(credentials, payload) {
   ]);
 }
 
+/*
+  requestTopicLabel: 새 주제가 처음 생성될 때만 호출해서, 키워드 나열이 아닌
+  자연스러운 한 문장 라벨을 AI에게 짓게 합니다. indexArticleLocalTopic이
+  기존 주제와 매칭되지 않았을 때만(=새 사건일 때만) 호출합니다.
+*/
+async function requestTopicLabel(credentials, payload) {
+  return requestGroqJson(credentials, [
+    {
+      role: "system",
+      content: buildTopicLabelPrompt()
+    },
+    {
+      role: "user",
+      content: JSON.stringify(payload, null, 2)
+    }
+  ]);
+}
+
 
 // ─────────────────────────────────────────────
 // Groq AI API를 실제로 호출하고 응답을 JSON으로 반환하는 함수
