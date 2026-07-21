@@ -78,6 +78,24 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // wordStats/{wordHash}: 단어 하나당 문서 하나(문서 ID = 단어의 SHA-256 해시).
+    // 지금까지 분석한 기사들에서 이 단어가 키워드로 뽑힌 누적 횟수(count)만 담아
+    // IDF(역문서빈도) 계산에 쓴다.
+    match /wordStats/{wordHash} {
+      allow read: if true;
+
+      allow create, update: if
+        wordHash.matches('^[0-9a-f]{64}$')
+        && request.resource.data.keys().hasOnly(['word', 'count'])
+        && request.resource.data.word is string
+        && request.resource.data.word.size() > 0
+        && request.resource.data.word.size() <= 60
+        && request.resource.data.count is number
+        && request.resource.data.count >= 0;
+
+      allow delete: if false;
+    }
+
     // 위에서 다루지 않은 나머지 모든 경로는 기본적으로 완전히 차단한다.
     match /{document=**} {
       allow read, write: if false;

@@ -46,12 +46,20 @@ const TOPICS_COLLECTION = "topics";
 // 분석 내용까지" 바로 조회할 수 있게 한다.
 const ARTICLES_COLLECTION = "articles";
 
+// 단어 하나당 문서 하나(문서 ID = 단어의 SHA-256 해시). 지금까지 분석한 기사
+// 전체에서 이 단어가 몇 번이나 키워드로 뽑혔는지 누적한다 — "이 단어가 전체적으로
+// 얼마나 흔한가"를 코퍼스 기반으로 판단하는 IDF(역문서빈도)의 재료로 쓴다.
+const WORD_STATS_COLLECTION = "wordStats";
+
 // 로컬 키워드 추출: 제목 쪽 단어에 더 높은 가중치를 준다(본문 단어보다 주제를 잘 대표하므로).
 const LOCAL_KEYWORD_TITLE_WEIGHT = 3;
 // 이 가중치 합계 이상인 단어만(또는 제목에 등장한 단어는 무조건) 키워드 후보로 남긴다.
 const LOCAL_KEYWORD_MIN_SCORE = 2;
-// 기사 하나에서 뽑아 쓰는 키워드 최대 개수.
+// 기사 하나에서 최종적으로 뽑아 쓰는 키워드 최대 개수.
 const LOCAL_KEYWORD_MAX_COUNT = 6;
+// IDF 재가중을 적용하기 전, 1차로 빈도 점수만으로 추려두는 후보 단어 개수(이 안에서만
+// Firestore에 문서 빈도를 조회한다 — 조회량을 제한하기 위함).
+const LOCAL_KEYWORD_CANDIDATE_POOL = 15;
 
 // 두 기사가 "같은 사건"으로 묶이려면 최소 이만큼 키워드가 겹쳐야 한다.
 const TOPIC_MATCH_MIN_OVERLAP = 2;

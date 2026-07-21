@@ -82,13 +82,83 @@ function tokenizeLocalText(text) {
 }
 
 /*
-  extractLocalKeywords: AI 없이 제목/본문에서 이 기사를 대표할 만한 키워드를
-  뽑습니다. 제목(og_title/page_title/link_text)에 등장한 단어는 본문 단어보다
-  LOCAL_KEYWORD_TITLE_WEIGHT배 더 중요하게 취급합니다 — 제목이 본문보다 주제를
-  압축적으로 담고 있기 때문입니다. 최종적으로 가중치 점수가 높은 순서대로
-  최대 LOCAL_KEYWORD_MAX_COUNT개를 반환합니다.
+  keywordsEquivalent: 두 키워드를 "같은 대상"으로 볼지 판단합니다. 완전히
+  같으면 당연히 같은 것이고, 그렇지 않더라도 한쪽이 다른 쪽의 접두어이면 같은
+  것으로 봅니다 — 한국어 기관/학교명은 뒷부분을 잘라 줄여 쓰는 경우가 많아서
+  ("배재고등학교" → "배재고") 문자열이 완전히 같지 않아도 실제로는 같은 대상을
+  가리키는 경우가 흔하기 때문입니다. 접두어가 너무 짧으면(1글자) 우연히 겹칠
+  수 있으므로 최소 2글자는 되어야 인정합니다.
 */
-function extractLocalKeywords(analysisInput) {
+function keywordsEquivalent(a, b) {
+  if (a === b) {
+    return true;
+  }
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  return shorter.length >= 2 && longer.startsWith(shorter);
+}
+
+/*
+  compareKeywordSets: 두 키워드 배열 사이에서 keywordsEquivalent 기준으로 서로
+  짝지어지는 개수(overlapCount)와 합집합 크기(unionSize)를 구합니다. 각 단어는
+  최대 한 번만 짝지어지도록(bUsed) 해서 같은 상대와 중복으로 여러 번 겹친 것으로
+  잘못 세지 않게 합니다.
+*/
+function compareKeywordSets(a, b) {
+  const bMatched = new Array(b.length).fill(false);
+  let overlapCount = 0;
+
+  for (const wordA of a) {
+    const matchIndex = b.findIndex((wordB, idx) => !bMatched[idx] && keywordsEquivalent(wordA, wordB));
+    if (matchIndex !== -1) {
+      bMatched[matchIndex] = true;
+      overlapCount += 1;
+    }
+  }
+
+  return { overlapCount, unionSize: a.length + b.length - overlapCount };
+}
+
+/*
+  mergeKeywordLists: 기존 주제의 키워드 목록에 이 기사의 키워드를 합칩니다.
+  Set으로 단순 합치면 "배재고"와 "배재고등학교"가 서로 다른 항목으로 둘 다
+  남아서 목록만 계속 늘어나므로, keywordsEquivalent로 이미 있는 항목과 같은
+  대상이면 추가하지 않고, 대신 더 긴(더 구체적인) 표기로 교체합니다.
+*/
+function mergeKeywordLists(existing, incoming, cap) {
+  const merged = [...existing];
+
+  for (const word of incoming) {
+    const matchIndex = merged.findIndex((existingWord) => keywordsEquivalent(existingWord, word));
+    if (matchIndex === -1) {
+      merged.push(word);
+    } else if (word.length > merged[matchIndex].length) {
+      merged[matchIndex] = word;
+    }
+  }
+
+  return merged.slice(0, cap);
+}
+
+/*
+  extractLocalKeywords: AI 없이 제목/본문에서 이 기사를 대표할 만한 키워드를
+  뽑습니다. 두 단계로 나뉩니다.
+
+  ① 빈도 기반 1차 후보 선정: 제목(og_title/page_title/link_text)에 등장한
+     단어는 본문 단어보다 LOCAL_KEYWORD_TITLE_WEIGHT배 더 중요하게 취급하고,
+     점수가 높은 순으로 LOCAL_KEYWORD_CANDIDATE_POOL개까지만 추립니다.
+
+  ② IDF(역문서빈도) 재가중: "이 기사에 얼마나 자주 나왔는가"만으로는 "정부",
+     "발표"처럼 어느 기사에나 흔한 단어가 상위권에 오를 수 있습니다. 그래서
+     Firestore의 wordStats 컬렉션에서 "지금까지 분석한 기사들 중 이 단어가
+     키워드로 뽑힌 횟수"를 조회해서, 그 횟수가 많을수록(=흔한 단어일수록)
+     점수를 나눠서 깎습니다. 아직 한 번도 안 나온 단어(문서 빈도 0)는 나누는
+     값이 가장 작아서(log2(2)=1) 원래 점수 그대로 유지되고, 자주 나온 단어일수록
+     점수가 로그 스케일로 줄어듭니다. Firestore 조회가 실패해도(오프라인 등)
+     조용히 건너뛰고 빈도 점수만으로 순위를 매깁니다 — AI 호출은 어느 경우에도
+     발생하지 않습니다.
+*/
+async function extractLocalKeywords(analysisInput) {
   const titleText = [analysisInput?.og_title, analysisInput?.page_title, analysisInput?.link_text]
     .filter(Boolean)
     .join(" ");
@@ -105,8 +175,15 @@ function extractLocalKeywords(analysisInput) {
   titleTokens.forEach((token) => addScore(token, LOCAL_KEYWORD_TITLE_WEIGHT));
   bodyTokens.forEach((token) => addScore(token, 1));
 
-  return [...scoreByToken.entries()]
+  const candidates = [...scoreByToken.entries()]
     .filter(([token, score]) => score >= LOCAL_KEYWORD_MIN_SCORE || titleTokenSet.has(token))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, LOCAL_KEYWORD_CANDIDATE_POOL);
+
+  const docFrequencies = await fetchCandidateDocumentFrequencies(candidates.map(([token]) => token));
+
+  return candidates
+    .map(([token, score]) => [token, score / Math.log2(2 + (docFrequencies.get(token) || 0))])
     .sort((a, b) => b[1] - a[1])
     .map(([token]) => token)
     .slice(0, LOCAL_KEYWORD_MAX_COUNT);
@@ -224,8 +301,20 @@ async function queryTopicsByKeywords(config, keywords) {
     });
 }
 
-async function saveTopicDoc(config, topicId, data) {
-  const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${TOPICS_COLLECTION}/${topicId}?key=${config.apiKey}`;
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/*
+  saveFirestoreDoc: {collection}/{docId} 문서를 통째로 써넣습니다(PATCH — 없으면
+  생성, 있으면 덮어씀). topics/articles/wordStats 세 컬렉션이 모두 이 함수를
+  공유합니다.
+*/
+async function saveFirestoreDoc(config, collection, docId, data) {
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${collection}/${docId}?key=${config.apiKey}`;
   const response = await fetch(endpoint, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -233,31 +322,134 @@ async function saveTopicDoc(config, topicId, data) {
   });
 
   if (!response.ok) {
-    console.warn("[Intone/Topics] 주제 저장 실패", response.status, await response.text());
+    console.warn("[Intone/Topics] 문서 저장 실패", collection, response.status, await response.text());
   }
 }
 
 /*
+  getFirestoreDoc: {collection}/{docId} 문서 하나를 읽습니다. 없으면(404) null을
+  반환합니다.
+*/
+async function getFirestoreDoc(config, collection, docId) {
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${collection}/${docId}?key=${config.apiKey}`;
+  const response = await fetch(endpoint, { method: "GET" });
+
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    console.warn("[Intone/Topics] 문서 조회 실패", collection, response.status, await response.text());
+    return null;
+  }
+
+  const doc = await response.json();
+  return firestoreFieldsToObject(doc.fields);
+}
+
+/*
+  fetchWordDocumentFrequencies: wordStats 컬렉션에서 주어진 단어들의 누적 등장
+  문서 수(count)를 한 번의 batchGet 요청으로 모두 가져옵니다. 등록된 적 없는
+  단어는 결과에 아예 나타나지 않으므로(=문서 빈도 0으로 취급) 별도 처리가
+  필요 없습니다.
+*/
+async function fetchWordDocumentFrequencies(config, words) {
+  if (!words.length) {
+    return new Map();
+  }
+
+  const docIds = await Promise.all(words.map((word) => sha256Hex(word)));
+  const documents = docIds.map(
+    (docId) => `projects/${config.projectId}/databases/(default)/documents/${WORD_STATS_COLLECTION}/${docId}`
+  );
+
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents:batchGet?key=${config.apiKey}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ documents })
+  });
+
+  if (!response.ok) {
+    console.warn("[Intone/Topics] 단어 문서 빈도 조회 실패", response.status, await response.text());
+    return new Map();
+  }
+
+  const rows = await response.json();
+  const freqByWord = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row?.found) {
+      continue;
+    }
+    const fields = firestoreFieldsToObject(row.found.fields);
+    if (typeof fields.word === "string") {
+      freqByWord.set(fields.word, Number(fields.count) || 0);
+    }
+  }
+  return freqByWord;
+}
+
+/*
+  fetchCandidateDocumentFrequencies: extractLocalKeywords 안에서만 쓰는 얇은
+  래퍼입니다. Firebase 설정이 없거나 네트워크 오류가 나면 조용히 빈 Map을
+  반환해서, IDF 재가중 없이 빈도 점수만으로도 키워드 추출이 정상적으로
+  이어지게 합니다(클러스터링과 마찬가지로 실패해도 분석 자체는 막지 않음).
+*/
+async function fetchCandidateDocumentFrequencies(words) {
+  if (!words.length) {
+    return new Map();
+  }
+  try {
+    const config = await getFirebaseConfig();
+    if (!config) {
+      return new Map();
+    }
+    return await fetchWordDocumentFrequencies(config, words);
+  } catch (error) {
+    console.warn("[Intone/Topics] 단어 문서 빈도 조회 오류", error);
+    return new Map();
+  }
+}
+
+/*
+  bumpWordStats: 최종적으로 이 기사의 키워드로 선택된 단어들의 누적 등장
+  문서 수를 1씩 늘립니다. 읽고-다시 쓰는 방식이라 완벽하게 원자적이지는
+  않지만(동시에 같은 단어가 여러 번 색인되면 카운트가 한두 번 덜 늘 수 있음),
+  이 값은 "대략 얼마나 흔한 단어인가"를 가늠하는 휴리스틱일 뿐이라 약간의
+  오차는 문제가 되지 않습니다.
+*/
+async function bumpWordStats(config, words) {
+  await Promise.all(words.map(async (word) => {
+    try {
+      const docId = await sha256Hex(word);
+      const existing = await getFirestoreDoc(config, WORD_STATS_COLLECTION, docId);
+      const nextCount = (Number(existing?.count) || 0) + 1;
+      await saveFirestoreDoc(config, WORD_STATS_COLLECTION, docId, { word, count: nextCount });
+    } catch (error) {
+      console.warn("[Intone/Topics] 단어 통계 갱신 오류", word, error);
+    }
+  }));
+}
+
+/*
   pickBestTopicMatch: 후보 주제들 중 이 기사의 키워드와 가장 많이 겹치는 것을
-  고릅니다. 겹치는 개수가 TOPIC_MATCH_MIN_OVERLAP 미만이거나 자카드 유사도가
-  TOPIC_MATCH_MIN_JACCARD 미만이면 후보에서 제외합니다 — 로컬 키워드 추출은
-  AI보다 노이즈가 많아서, 흔한 단어 하나만 겹쳐도 묶이면 전혀 다른 사건까지
-  잘못 합쳐질 수 있기 때문입니다.
+  고릅니다. compareKeywordSets가 keywordsEquivalent(완전 일치 또는 접두어 관계)
+  기준으로 겹침을 셉니다. 겹치는 개수가 TOPIC_MATCH_MIN_OVERLAP 미만이거나
+  자카드 유사도가 TOPIC_MATCH_MIN_JACCARD 미만이면 후보에서 제외합니다 —
+  로컬 키워드 추출은 AI보다 노이즈가 많아서, 흔한 단어 하나만 겹쳐도 묶이면
+  전혀 다른 사건까지 잘못 합쳐질 수 있기 때문입니다.
 */
 function pickBestTopicMatch(candidates, keywords) {
-  const keywordSet = new Set(keywords);
   let best = null;
   let bestJaccard = -1;
 
   for (const candidate of candidates) {
     const candidateKeywords = Array.isArray(candidate.keywords) ? candidate.keywords : [];
-    const overlap = candidateKeywords.filter((kw) => keywordSet.has(kw)).length;
-    if (overlap < TOPIC_MATCH_MIN_OVERLAP) {
+    const { overlapCount, unionSize } = compareKeywordSets(candidateKeywords, keywords);
+    if (overlapCount < TOPIC_MATCH_MIN_OVERLAP) {
       continue;
     }
 
-    const unionSize = new Set([...candidateKeywords, ...keywords]).size;
-    const jaccard = unionSize ? overlap / unionSize : 0;
+    const jaccard = unionSize ? overlapCount / unionSize : 0;
     if (jaccard < TOPIC_MATCH_MIN_JACCARD) {
       continue;
     }
@@ -271,45 +463,25 @@ function pickBestTopicMatch(candidates, keywords) {
   return best;
 }
 
-async function sha256Hex(text) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-/*
-  saveArticleDoc: articles/{hash(url)} 문서를 통째로 써넣습니다. topics 문서는
-  articleUrls 배열만 가지고 있어서 "이 주제에 어떤 URL들이 있는지"만 알 수
-  있는데, 이 문서는 그 기사 하나의 신뢰도·어그로도·요약까지 topicId와 함께
-  담아서 "같은 주제의 기사들을 분석 내용까지" 바로 조회할 수 있게 합니다.
-*/
-async function saveArticleDoc(config, docId, data) {
-  const endpoint = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/(default)/documents/${ARTICLES_COLLECTION}/${docId}?key=${config.apiKey}`;
-  const response = await fetch(endpoint, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fields: objectToFirestoreFields(data) })
-  });
-
-  if (!response.ok) {
-    console.warn("[Intone/Topics] 기사 저장 실패", response.status, await response.text());
-  }
-}
-
 /*
   indexArticleLocalTopic: 방금 분석을 마친 기사를 로컬 키워드로 색인합니다.
+  analysisInput(제목/본문)에서 키워드를 직접 뽑는 것부터 이 함수 안에서
+  처리합니다(extractLocalKeywords는 IDF 재가중을 위해 Firestore 조회가 필요한
+  비동기 함수라서, 호출 지점을 이 함수 하나로 모아둡니다).
+
   겹치는 키워드를 가진 기존 주제가 있고 자카드 유사도 기준을 넘으면 그 주제에
   합류시키고, 아니면 새 주제를 만듭니다. 그다음 이 기사 자체도 topicId를 붙여
-  별도의 articles 컬렉션에 저장합니다 — topics 문서는 URL 목록만 가지고 있고,
-  각 기사의 실제 분석 결과(점수/요약/제목)는 이 컬렉션에서 topicId로 찾습니다.
-  handleAnalyzeRequest가 분석 완료 후 결과를 보여준 뒤 조용히 호출합니다
-  (실패해도 사용자에게 보여줄 결과에는 영향 없음). AI API는 호출하지 않습니다
-  — Firestore 읽기/쓰기만 사용합니다.
+  별도의 articles 컬렉션에 저장하고, 마지막으로 이 기사의 키워드들을
+  wordStats에 반영해서 다음 기사의 IDF 계산에 쓰입니다. handleAnalyzeRequest가
+  분석 완료 후 결과를 보여준 뒤 조용히 호출합니다(실패해도 사용자에게 보여줄
+  결과에는 영향 없음). AI API는 호출하지 않습니다 — Firestore 읽기/쓰기만
+  사용합니다.
 */
-async function indexArticleLocalTopic(url, validated, keywords) {
-  const config = await getFirebaseConfig();
+async function indexArticleLocalTopic(url, validated, analysisInput) {
+  const keywords = await extractLocalKeywords(analysisInput);
   const cleanKeywords = Array.isArray(keywords) ? keywords.filter((kw) => typeof kw === "string" && kw) : [];
+
+  const config = await getFirebaseConfig();
   if (!config || !url || cleanKeywords.length < TOPIC_MATCH_MIN_KEYWORDS) {
     return; // 색인 재료(키워드)가 부족하면 건너뜀 — 오분류를 막기 위함
   }
@@ -325,8 +497,8 @@ async function indexArticleLocalTopic(url, validated, keywords) {
       topicId = matched.id;
       topicLabel = matched.topic || cleanKeywords.slice(0, 2).join(" · ");
       const articleUrls = Array.isArray(matched.articleUrls) ? matched.articleUrls : [];
-      const mergedKeywords = Array.from(new Set([...(matched.keywords || []), ...cleanKeywords])).slice(0, TOPIC_KEYWORD_CAP);
-      await saveTopicDoc(config, topicId, {
+      const mergedKeywords = mergeKeywordLists(matched.keywords || [], cleanKeywords, TOPIC_KEYWORD_CAP);
+      await saveFirestoreDoc(config, TOPICS_COLLECTION, topicId, {
         topic: topicLabel,
         keywords: mergedKeywords,
         articleUrls: articleUrls.includes(url) ? articleUrls : [...articleUrls, url],
@@ -336,7 +508,7 @@ async function indexArticleLocalTopic(url, validated, keywords) {
     } else {
       topicId = crypto.randomUUID();
       topicLabel = cleanKeywords.slice(0, 2).join(" · ");
-      await saveTopicDoc(config, topicId, {
+      await saveFirestoreDoc(config, TOPICS_COLLECTION, topicId, {
         topic: topicLabel,
         keywords: cleanKeywords,
         articleUrls: [url],
@@ -346,7 +518,7 @@ async function indexArticleLocalTopic(url, validated, keywords) {
     }
 
     const articleDocId = await sha256Hex(url);
-    await saveArticleDoc(config, articleDocId, {
+    await saveFirestoreDoc(config, ARTICLES_COLLECTION, articleDocId, {
       url,
       topicId,
       topic: topicLabel,
@@ -358,6 +530,8 @@ async function indexArticleLocalTopic(url, validated, keywords) {
       summary:           sanitizeText(validated?.summary          || "", 180),
       analyzedAt: Date.now()
     });
+
+    await bumpWordStats(config, cleanKeywords);
   } catch (error) {
     console.warn("[Intone/Topics] 주제/기사 색인 오류", error);
   }

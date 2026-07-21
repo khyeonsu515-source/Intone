@@ -236,8 +236,7 @@ async function handleAnalyzeRequest(payload, sender) {
   // 같은 사건을 다룬 기사끼리 묶기 — AI 호출 없이 제목/본문에서 로컬로 뽑은
   // 키워드로 Firestore 주제 클러스터를 갱신하고, 이 기사의 분석 결과도
   // topicId와 함께 저장한다(실패해도 결과 표시에는 영향 없음).
-  const localKeywords = extractLocalKeywords(analysisInput);
-  indexArticleLocalTopic(url, validated, localKeywords).catch(() => {});
+  indexArticleLocalTopic(url, validated, analysisInput).catch(() => {});
 
   // 최종 완료 상태 표시
   updateStatus({
